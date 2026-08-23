@@ -1,0 +1,59 @@
+# PRF CI gates — macOS-first lane (owner decision).
+# Follow-up lanes planned: ubuntu-latest (pwsh 7 cross-check) and
+# windows-latest (Windows PowerShell 5.1 matrix). This repo is not yet pushed;
+# the workflow activates automatically on first push.
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  gates:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install YAML runtime
+        run: python -m pip install --quiet pyyaml
+
+      - name: L0 package integrity
+        run: python tools/validate.py
+
+      - name: L1 rule self-test
+        run: python tools/rule-selftest.py
+
+      # pwsh is preinstalled on GitHub macOS runner images.
+      - name: L3 syntax gate (PowerShell parser)
+        shell: pwsh
+        run: |
+          $fail = @()
+          Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object {
+            $tokens = $null; $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+                $_.FullName, [ref]$tokens, [ref]$errors)
+            if ($errors.Count) { $fail += '{0}: {1}' -f $_.Name, $errors[0].Message }
+          }
+          if ($fail.Count) { $fail | ForEach-Object { Write-Host "x $_" }; exit 1 }
+          Write-Host 'all .ps1 files parse clean'
+
+      - name: L3 static gate (PSScriptAnalyzer)
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          Import-Module PSScriptAnalyzer
+          $bad = 0
+          Get-ChildItem examples/good -Filter *.ps1 | ForEach-Object {
+            $errs = @(Invoke-ScriptAnalyzer -Path $_.FullName -Severity Error, Warning) |
+                    Where-Object Severity -eq 'Error'
+            if ($errs.Count) { Write-Host "x $($_.Name): $($errs[0].RuleName)"; $bad++ }
+          }
+          if ($bad -gt 0) { exit 1 }
+          Write-Host 'good samples carry zero Error-severity findings'

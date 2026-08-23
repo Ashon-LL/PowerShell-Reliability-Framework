@@ -1,0 +1,24 @@
+Creative Commons Attribution 4.0 International (CC-BY-4.0)
+===========================================================
+
+This license applies to the DATASET portion of the PowerShell Reliability
+Framework repository:
+
+    knowledge/*.md          knowledge-base documents
+    rules/*.yaml            machine-readable reliability rule corpus
+    benchmark/*.json        benchmark cases and scoring rubrics
+    examples/               paired negative/positive training samples
+
+Code (tools/, CI workflows) is licensed separately under the MIT License —
+see the LICENSE file.
+
+You are free to share and adapt this material for any purpose, including
+commercially, provided you give appropriate credit. Suggested attribution:
+
+    "PowerShell Reliability Framework (PRF) dataset",
+    https://github.com/<org>/PowerShell-Reliability-Framework, CC-BY-4.0.
+
+Full legal text:  https://creativecommons.org/licenses/by/4.0/legalcode
+Human-readable summary: https://creativecommons.org/licenses/by/4.0/
+
+SPDX-License-Identifier: CC-BY-4.0

