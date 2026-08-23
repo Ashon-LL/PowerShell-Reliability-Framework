@@ -115,7 +115,7 @@ Full catalog with explanations: `knowledge/anti-patterns.md`.
 | `knowledge/enterprise-patterns.md` | ShouldProcess, logging, remoting, bulk ops |
 | `knowledge/anti-patterns.md` | AP-01..AP-24 catalog with repairs |
 | `examples/bad/`, `examples/good/` | paired negative/positive scripts |
-| `benchmark/cases.json` | scored evaluation rubric (v0.1: 20 cases) |
+| `benchmark/cases.json` | scored evaluation rubric (v0.1: 100 cases) |
 
 ## 4. Escalation triggers — stop and ask the human
 

@@ -33,7 +33,7 @@ PowerShell-Reliability-Framework/
 │   ├── good/                       # 10 个对应正样本
 │   └── EXAMPLES.md                 # 配对索引
 ├── benchmark/
-│   └── cases.json                  # 可靠性 Benchmark（v0.1：20 个试点用例）
+│   └── cases.json                  # 可靠性 Benchmark（v0.1：100 个用例）
 ├── tools/
 │   ├── probe-environment.ps1       # 目标机规范探测脚本
 │   ├── validate.py                 # 包完整性门禁（L0）
@@ -86,7 +86,7 @@ psscriptanalyzer}`。当前 100 条中 36 条带检测提示（见 YAML 头部 `
 
 | 指标 | 目标 | 当前 |
 |---|---:|---:|
-| Benchmark 用例数 | 100 | 20（试点；Week-1 里程碑） |
+| Benchmark 用例数 | 100 | 100 ✅ |
 | 规则条数 | 100+ | 100 |
 | 知识文档 | 5 | 5 |
 | 示例配对 | — | 10 |

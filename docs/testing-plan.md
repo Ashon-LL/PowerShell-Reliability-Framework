@@ -31,7 +31,7 @@
 ### 2.1 Design (two-arm controlled)
 
 ```text
-subjects (≥3 models) × arms (treatment = SKILL.md + rules injected / control) × cases (20+) × repeats k=3
+subjects (≥3 models) × arms (treatment = SKILL.md + rules injected / control) × cases (100) × repeats k=3
 ```
 
 - **Controlled variables**: pinned model snapshot ID, fixed temperature, identical
@@ -96,7 +96,7 @@ PowerShell 7 is cross-platform: install pwsh on Linux and PSScriptAnalyzer runs 
 |---|---|---|---|
 | this week | wire L0/L1 into CI; first L3 run on Linux pwsh | none | 0.5 day |
 | next | benchmark runner (prompt templates + deterministic grader + runs archive) | none | 1–2 days |
-| then | first two-arm round (3 subjects × 2 arms × 20 cases × 3 repeats ≈ 360 generations + 360 gradings) | ≥1 model API key | moderate token cost |
+| then | first two-arm round (3 subjects × 2 arms × 100 cases × 3 repeats ≈ 1,800 generations + 1,800 gradings) | ≥1 model API key | moderate token cost |
 | pre-release | calibrate thresholds from round 1 → fill README metrics → tag alpha | one completed L2 round | — |
 
 ## 5. Current status
@@ -107,6 +107,7 @@ PowerShell 7 is cross-platform: install pwsh on Linux and PSScriptAnalyzer runs 
 - ✅ L1: first run caught a real defect (IDEM-011 word-boundary missed the
   `…RecordA` variant family) — fixed; 19 detection fields normalized; 1 fabricated
   PSA id removed;
+- ✅ benchmark expanded 20 → 100 cases (2026-08-23)
 - ✅ L3: all 21 `.ps1` files parse clean under PS 7.6; static gate passes with
   perfect discrimination (good = 0 errors, bad = 10/10 flagged);
 - ⬜ L2/L4 proceed per §4; runner code lands once an external API key exists.

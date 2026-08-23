@@ -34,7 +34,7 @@ PowerShell-Reliability-Framework/
 │   ├── good/                       # 10 matching positive samples
 │   └── EXAMPLES.md                 # pair index
 ├── benchmark/
-│   └── cases.json                  # reliability benchmark (v0.1: 20 pilot cases)
+│   └── cases.json                  # reliability benchmark (v0.1: 100 cases)
 ├── tools/
 │   ├── probe-environment.ps1       # canonical target-machine probe
 │   ├── validate.py                 # package integrity gate (L0)
@@ -86,7 +86,7 @@ Each rule in `rules/reliability-rules.yaml` carries: `id · category · severity
 
 | Metric | Target | Current |
 |---|---:|---:|
-| Benchmark cases | 100 | 20 (pilot; Week-1 milestone) |
+| Benchmark cases | 100 | 100 ✅ |
 | Rules | 100+ | 100 |
 | Knowledge docs | 5 | 5 |
 | Example pairs | — | 10 |
