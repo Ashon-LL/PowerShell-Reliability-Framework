@@ -30,17 +30,15 @@ jobs:
       - name: L1 rule self-test
         run: python tools/rule-selftest.py
 
-  # Ubuntu lane: pwsh 7.x only
+  # Ubuntu lane: pwsh 7.4 preinstalled on ubuntu-24.04
   ubuntu-latest:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up pwsh
-        uses: actions/setup-powershell@v2
-        with:
-          powerShellVersion: 'latest'
+      - name: Verify pwsh
+        run: pwsh --version
 
       - name: L3 syntax gate (PowerShell parser)
         shell: pwsh
@@ -53,9 +51,9 @@ jobs:
             if ($errors.Count) { $fail += '{0}: {1}' -f $_.Name, $errors[0].Message }
           }
           if ($fail.Count) { $fail | ForEach-Object { Write-Host "x $_" }; exit 1 }
-          Write-Host 'all .ps1 files parse clean on Ubuntu (pwsh 7)'
+          Write-Host 'all .ps1 files parse cleanly (Ubuntu 24.04 / pwsh 7.4)'
 
-      - name: L3 static gate (PSScriptAnalyzer 1.25)
+      - name: L3 static gate (PSScriptAnalyzer)
         shell: pwsh
         run: |
           Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
@@ -87,7 +85,7 @@ jobs:
             if ($errors.Count) { $fail += '{0}: {1}' -f $_.Name, $errors[0].Message }
           }
           if ($fail.Count) { $fail | ForEach-Object { Write-Host "x $_" }; exit 1 }
-          Write-Host 'all .ps1 files parse clean on Windows (PowerShell 5.1)'
+          Write-Host 'all .ps1 files parse cleanly (Windows PowerShell 5.1)'
 
       - name: L3 syntax gate (pwsh 7 parser)
         shell: pwsh
@@ -100,7 +98,7 @@ jobs:
             if ($errors.Count) { $fail += '{0}: {1}' -f $_.Name, $errors[0].Message }
           }
           if ($fail.Count) { $fail | ForEach-Object { Write-Host "x $_" }; exit 1 }
-          Write-Host 'all .ps1 files parse clean on Windows (pwsh 7)'
+          Write-Host 'all .ps1 files parse cleanly (pwsh 7)'
 
       - name: L3 static gate (PSScriptAnalyzer <=1.21 for 5.1)
         shell: pwsh
