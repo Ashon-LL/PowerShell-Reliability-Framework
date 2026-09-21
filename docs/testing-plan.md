@@ -103,7 +103,7 @@ model-judged layer until that lane exists.
 
 | Phase | Work | Prerequisite | Estimate |
 |---|---|---|---|
-| this week | wire L0/L1 into CI; first L3 run on Linux pwsh | none | 0.5 day |
+| this week | add `ubuntu-latest` (pwsh 7) and `windows-latest` (5.1) lanes on top of the existing macOS L0/L1 gates | none | 0.5 day |
 | next | benchmark runner (prompt templates + deterministic grader + runs archive) | none | 1–2 days |
 | then | first two-arm round (3 subjects × 2 arms × 110 cases × 3 repeats ≈ 1,980 generations + 1,980 gradings) | ≥1 model API key | moderate token cost |
 | pre-release | calibrate thresholds from round 1 → fill README metrics → tag alpha | one completed L2 round | — |
@@ -116,11 +116,12 @@ model-judged layer until that lane exists.
 - ✅ L1: first run caught a real defect (IDEM-011 word-boundary missed the
   `…RecordA` variant family) — fixed; 19 detection fields normalized; 1 fabricated
   PSA id removed;
-- ✅ benchmark expanded 20 → 100 cases (2026-08-23)
+- ✅ benchmark expanded 20 → 100 cases (2026-08-23) → 110 with the heredoc axis
 - ✅ `heredoc` category added: 9 HD rules, 1 knowledge doc, 2 example pairs,
   10 benchmark cases (109 rules / 110 cases / 12 pairs total);
 - ✅ L3: all 25 `.ps1` files parse clean on both pwsh 7.6.5 and Windows PowerShell
-  5.1.26100.8115; PSSA 1.25 reports zero Error-severity findings on `examples/good`;
+  5.1.26100.8115; PSSA 1.25 reports zero Error-severity findings on `examples/good`
+  (pwsh only — PSSA 1.25 does not load under 5.1, so the windows lane needs ≤1.21);
 - ⬜ L2/L4 proceed per §4; runner code lands once an external API key exists.
 
 > Bottom line: **L0/L1 prove the package is sound today; L2 is what will prove the
