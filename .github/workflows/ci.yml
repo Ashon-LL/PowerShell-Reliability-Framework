@@ -1,7 +1,6 @@
-# PRF CI gates — macOS-first lane (owner decision).
-# Follow-up lanes planned: ubuntu-latest (pwsh 7 cross-check) and
-# windows-latest (Windows PowerShell 5.1 matrix). Note: PSScriptAnalyzer 1.25
-# does not load under 5.1, so the windows lane needs PSSA <=1.21.
+# PRF CI gates — macOS anchor + ubuntu-latest (pwsh 7) + windows-latest (5.1)
+# per docs/testing-plan.md §4 "this week" task. PSSA 1.25 does not load under
+# 5.1, so the windows-latest lane uses PSSA <=1.21.
 name: ci
 
 on:
@@ -10,7 +9,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  gates:
+  # L0/L1 gates run once on macOS (fast, stable Python ecosystem)
+  base-gates:
     runs-on: macos-latest
     timeout-minutes: 15
     steps:
@@ -30,7 +30,18 @@ jobs:
       - name: L1 rule self-test
         run: python tools/rule-selftest.py
 
-      # pwsh is preinstalled on GitHub macOS runner images.
+  # Ubuntu lane: pwsh 7.x only
+  ubuntu-latest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pwsh
+        uses: actions/setup-powershell@v2
+        with:
+          powerShellVersion: 'latest'
+
       - name: L3 syntax gate (PowerShell parser)
         shell: pwsh
         run: |
@@ -42,9 +53,9 @@ jobs:
             if ($errors.Count) { $fail += '{0}: {1}' -f $_.Name, $errors[0].Message }
           }
           if ($fail.Count) { $fail | ForEach-Object { Write-Host "x $_" }; exit 1 }
-          Write-Host 'all .ps1 files parse clean'
+          Write-Host 'all .ps1 files parse clean on Ubuntu (pwsh 7)'
 
-      - name: L3 static gate (PSScriptAnalyzer)
+      - name: L3 static gate (PSScriptAnalyzer 1.25)
         shell: pwsh
         run: |
           Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
@@ -56,4 +67,52 @@ jobs:
             if ($errs.Count) { Write-Host "x $($_.Name): $($errs[0].RuleName)"; $bad++ }
           }
           if ($bad -gt 0) { exit 1 }
-          Write-Host 'good samples carry zero Error-severity findings'
+          Write-Host 'good samples carry zero Error-severity findings (PSSA 1.25)'
+
+  # Windows lane: pwsh 7 + Windows PowerShell 5.1
+  windows-latest:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: L3 syntax gate (PowerShell 5.1 parser)
+        shell: powershell
+        run: |
+          $fail = @()
+          Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object {
+            $tokens = $null; $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+                $_.FullName, [ref]$tokens, [ref]$errors)
+            if ($errors.Count) { $fail += '{0}: {1}' -f $_.Name, $errors[0].Message }
+          }
+          if ($fail.Count) { $fail | ForEach-Object { Write-Host "x $_" }; exit 1 }
+          Write-Host 'all .ps1 files parse clean on Windows (PowerShell 5.1)'
+
+      - name: L3 syntax gate (pwsh 7 parser)
+        shell: pwsh
+        run: |
+          $fail = @()
+          Get-ChildItem -Recurse -Filter *.ps1 | ForEach-Object {
+            $tokens = $null; $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+                $_.FullName, [ref]$tokens, [ref]$errors)
+            if ($errors.Count) { $fail += '{0}: {1}' -f $_.Name, $errors[0].Message }
+          }
+          if ($fail.Count) { $fail | ForEach-Object { Write-Host "x $_" }; exit 1 }
+          Write-Host 'all .ps1 files parse clean on Windows (pwsh 7)'
+
+      - name: L3 static gate (PSScriptAnalyzer <=1.21 for 5.1)
+        shell: pwsh
+        run: |
+          # 1.25 fails to load under 5.1; install 1.21 as the latest compatible version
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser -MaximumVersion 1.21
+          Import-Module PSScriptAnalyzer
+          $bad = 0
+          Get-ChildItem examples/good -Filter *.ps1 | ForEach-Object {
+            $errs = @(Invoke-ScriptAnalyzer -Path $_.FullName -Severity Error, Warning) |
+                    Where-Object Severity -eq 'Error'
+            if ($errs.Count) { Write-Host "x $($_.Name): $($errs[0].RuleName)"; $bad++ }
+          }
+          if ($bad -gt 0) { exit 1 }
+          Write-Host 'good samples carry zero Error-severity findings (PSSA 1.21, 5.1-compatible)'
