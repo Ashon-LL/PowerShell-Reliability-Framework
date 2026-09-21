@@ -21,9 +21,9 @@
 | Layer | Verifies | Tooling | Environment | Cost | Status |
 |---|---|---|---|---|---|
 | **L0** package integrity | schema / counts / pairing / detection shape | `tools/validate.py` | any (pyyaml) | seconds | ✅ built, run on every commit |
-| **L1** rule consistency | detectors vs own snippets | `tools/rule-selftest.py` | any | seconds | ✅ built (28 patterns: 13 precise / 15 contextual / 0 fail) |
+| **L1** rule consistency | detectors vs own snippets | `tools/rule-selftest.py` | any | seconds | ✅ built (37 patterns: 22 precise / 15 contextual / 0 fail) |
 | **L2** skill effectiveness A/B | quality delta with vs without PRF | benchmark runner (to build) | ≥3 LLM/agent APIs | ~720 calls per round | ⬜ protocol in §2 |
-| **L3** real-environment static gate | good samples parse + pass PSSA; probe smoke | pwsh + PSScriptAnalyzer | pwsh on Linux suffices; CI adds Windows 5.1 | half day setup | ✅ first run passed (pwsh 7.6 + PSSA 1.25: good=0 errors, bad=10/10 detected) |
+| **L3** real-environment static gate | good samples parse + pass PSSA; probe smoke | pwsh + PSScriptAnalyzer | pwsh on Linux suffices; CI adds Windows 5.1 | half day setup | ✅ 25/25 `.ps1` parse clean on pwsh 7.6.5 **and** Windows PowerShell 5.1.26100.8115; PSSA 1.25 reports 0 Error-severity findings on `examples/good` (pwsh only — 1.25 does not load under 5.1, so the windows-latest lane needs PSSA ≤1.21) |
 | **L4** regression guard | changes trigger full re-test | GitHub Actions gates | CI | low | ⬜ wire L0/L1 first |
 
 ## 2. L2 — core A/B evaluation protocol
@@ -31,7 +31,7 @@
 ### 2.1 Design (two-arm controlled)
 
 ```text
-subjects (≥3 models) × arms (treatment = SKILL.md + rules injected / control) × cases (100) × repeats k=3
+subjects (≥3 models) × arms (treatment = SKILL.md + rules injected / control) × cases (110) × repeats k=3
 ```
 
 - **Controlled variables**: pinned model snapshot ID, fixed temperature, identical
@@ -77,7 +77,7 @@ Pre-registered thresholds, written into the runner config before the first run:
 |---|---|
 | Generated Script Failure Reduction 50% | Δ(benchmark score) ≥ +0.15, lower CI bound > 0 |
 | Security Issue Detection 80%+ | SEC-case negative_check hit rate down ≥80% vs control arm |
-| Benchmark Cases 100 | case count itself (currently 20 pilot) |
+| Benchmark Cases 100 | case count itself (110 at v0.1) |
 | Agent Support 3+ | number of subjects completing the A/B |
 | Rules 100+ | corpus size (done; guarded by the L0 gate) |
 
@@ -90,13 +90,22 @@ PowerShell 7 is cross-platform: install pwsh on Linux and PSScriptAnalyzer runs 
 - CI matrix: `ubuntu-latest` (pwsh 7.x) + `windows-latest` (adds Windows PowerShell 5.1);
 - **hard rule: `bad/*.ps1` are never executed** — text comparison only.
 
+The `heredoc` cases (BENCH-HD-*) split cleanly along the L1/L2 boundary:
+delimiter column position, an unquoted heredoc delimiter, a `<<` inside a `.ps1`,
+a newline inside a single-quoted string, and a here-string piped into a cmdlet
+sink are all checkable by deterministic scan against `answer.ps1` with no LLM
+judge and no target machine. The byte-identity cases (HD-004 / HD-009) are the
+exception — proving `Set-Content -Encoding UTF8` writes `EF BB BF` on 5.1 and
+nothing on 7.x requires the `windows-latest` lane, so those two stay in the
+model-judged layer until that lane exists.
+
 ## 4. Rollout order & cost
 
 | Phase | Work | Prerequisite | Estimate |
 |---|---|---|---|
-| this week | wire L0/L1 into CI; first L3 run on Linux pwsh | none | 0.5 day |
+| this week | add `ubuntu-latest` (pwsh 7) and `windows-latest` (5.1) lanes on top of the existing macOS L0/L1 gates | none | 0.5 day |
 | next | benchmark runner (prompt templates + deterministic grader + runs archive) | none | 1–2 days |
-| then | first two-arm round (3 subjects × 2 arms × 100 cases × 3 repeats ≈ 1,800 generations + 1,800 gradings) | ≥1 model API key | moderate token cost |
+| then | first two-arm round (3 subjects × 2 arms × 110 cases × 3 repeats ≈ 1,980 generations + 1,980 gradings) | ≥1 model API key | moderate token cost |
 | pre-release | calibrate thresholds from round 1 → fill README metrics → tag alpha | one completed L2 round | — |
 
 ## 5. Current status
@@ -107,9 +116,12 @@ PowerShell 7 is cross-platform: install pwsh on Linux and PSScriptAnalyzer runs 
 - ✅ L1: first run caught a real defect (IDEM-011 word-boundary missed the
   `…RecordA` variant family) — fixed; 19 detection fields normalized; 1 fabricated
   PSA id removed;
-- ✅ benchmark expanded 20 → 100 cases (2026-08-23)
-- ✅ L3: all 21 `.ps1` files parse clean under PS 7.6; static gate passes with
-  perfect discrimination (good = 0 errors, bad = 10/10 flagged);
+- ✅ benchmark expanded 20 → 100 cases (2026-08-23) → 110 with the heredoc axis
+- ✅ `heredoc` category added: 9 HD rules, 1 knowledge doc, 2 example pairs,
+  10 benchmark cases (109 rules / 110 cases / 12 pairs total);
+- ✅ L3: all 25 `.ps1` files parse clean on both pwsh 7.6.5 and Windows PowerShell
+  5.1.26100.8115; PSSA 1.25 reports zero Error-severity findings on `examples/good`
+  (pwsh only — PSSA 1.25 does not load under 5.1, so the windows lane needs ≤1.21);
 - ⬜ L2/L4 proceed per §4; runner code lands once an external API key exists.
 
 > Bottom line: **L0/L1 prove the package is sound today; L2 is what will prove the

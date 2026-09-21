@@ -50,17 +50,17 @@ KNOWN_PSA = {
 }
 APPLIES_VOCAB = {"powershell-5.1", "powershell-7"}
 PREFIX_CATEGORY = {"COMP": "compatibility", "SAFE": "safety", "IDEM": "idempotency",
-                   "SEC": "security", "ERR": "error-handling"}
+                   "SEC": "security", "ERR": "error-handling", "HD": "heredoc"}
 BENCH_CAT = {"FS": "file-system", "REG": "registry", "AD": "active-directory",
              "AZ": "azure", "NET": "network", "SVC": "service", "SEC": "security",
-             "AUT": "automation"}
+             "AUT": "automation", "HD": "heredoc"}
 VALID_SEVERITY = {"critical", "high", "medium", "low", "info"}
-RULE_REF = re.compile(r"\b(?:COMP|SAFE|IDEM|SEC|ERR)-\d{3}\b")
+RULE_REF = re.compile(r"\b(?:COMP|SAFE|IDEM|SEC|ERR|HD)-\d{3}\b")
 CJK = re.compile(r"[\u4e00-\u9fff\u3040-\u30ff]")
 
 # ---------------------------------------------------------------- structure --
 for name in ("powershell-model", "compatibility", "security-rules",
-             "enterprise-patterns", "anti-patterns"):
+             "enterprise-patterns", "anti-patterns", "here-strings-and-heredocs"):
     p = ROOT / "knowledge" / f"{name}.md"
     if not p.exists() or p.stat().st_size < 2000:
         err(f"missing/thin knowledge doc: {p.relative_to(ROOT)}")
@@ -172,7 +172,7 @@ except Exception as exc:
     err(f"cases.json failed to parse: {exc}")
 case_ids, case_dist = [], {}
 if isinstance(bench, dict):
-    idpat = re.compile(r"^BENCH-(FS|REG|AD|AZ|NET|SVC|SEC|AUT)-\d{3}$")
+    idpat = re.compile(r"^BENCH-(FS|REG|AD|AZ|NET|SVC|SEC|AUT|HD)-\d{3}$")
     for c in bench.get("cases", []):
         cid = str(c.get("id", "<no-id>"))
         for key in ("category", "prompt", "rubric", "expected_behaviors"):
@@ -216,7 +216,7 @@ for f in sorted((ROOT / "examples").rglob("*.ps1")):
         err(f"{f.relative_to(ROOT)}: banner missing 'Rules demonstrated' line")
         continue
     for tok in filter(None, (t.strip() for t in re.split(r"[,;\s]+", m.group(1)))):
-        if tok.startswith(("COMP", "SAFE", "IDEM", "SEC", "ERR")) and tok not in corpus_ids:
+        if tok.startswith(("COMP", "SAFE", "IDEM", "SEC", "ERR", "HD")) and tok not in corpus_ids:
             err(f"{f.relative_to(ROOT)}: banner references unknown rule {tok}")
 
 # ----------------------------------------------------------------- language --

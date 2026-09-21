@@ -21,6 +21,8 @@ they are never meant to be executed.
 | 08 | scheduled-task-register | IDEM-009 | medium |
 | 09 | plaintext-credential-export | SEC-014 | critical |
 | 10 | foreach-parallel-compat | COMP-001 | low |
+| 11 | heredoc-manifest-writer | HD-004, HD-009 | medium |
+| 12 | heredoc-child-script-runner | HD-001, HD-002, SEC-001 | high |
 
 ## How agents should use these pairs
 
