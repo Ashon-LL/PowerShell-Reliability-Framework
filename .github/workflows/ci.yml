@@ -1,7 +1,7 @@
 # PRF CI gates — macOS-first lane (owner decision).
 # Follow-up lanes planned: ubuntu-latest (pwsh 7 cross-check) and
-# windows-latest (Windows PowerShell 5.1 matrix). This repo is not yet pushed;
-# the workflow activates automatically on first push.
+# windows-latest (Windows PowerShell 5.1 matrix). Note: PSScriptAnalyzer 1.25
+# does not load under 5.1, so the windows lane needs PSSA <=1.21.
 name: ci
 
 on:

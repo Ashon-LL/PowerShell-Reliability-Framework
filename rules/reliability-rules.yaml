@@ -1,15 +1,16 @@
 schema_version: 0.1.0
 name: prf-reliability-rules
 description: 'Machine-readable reliability rule corpus for AI-generated PowerShell (PRF v0.1.0). Categories:
-  compatibility (COMP), safety (SAFE), idempotency (IDEM), security (SEC), error-handling (ERR). Agents
-  self-review drafts against this corpus per SKILL.md Step 4.'
-rule_count: 100
+  compatibility (COMP), safety (SAFE), idempotency (IDEM), security (SEC), error-handling (ERR),
+  heredoc (HD). Agents self-review drafts against this corpus per SKILL.md Step 4.'
+rule_count: 109
 categories:
 - compatibility
 - safety
 - idempotency
 - security
 - error-handling
+- heredoc
 rules:
 - id: COMP-001
   category: compatibility
@@ -3088,4 +3089,287 @@ rules:
   - powershell-7
   tags:
   - authorization
-detection_rule_count: 36
+- id: HD-001
+  category: heredoc
+  severity: high
+  title: The here-string terminator must begin at column one
+  description: 'The closing delimiter of a here-string has to be the first character on its line. A single
+    leading space or tab is enough to break the script: both runtimes report ''White space is not
+    allowed before the string terminator'' and the whole file stops parsing. Models produce this
+    because the body is usually indented to match the surrounding block, so the terminator is
+    indented along with it. Put the terminator at column one and let the payload carry its own
+    indentation, or build the payload with a joined array when the surrounding style must stay
+    aligned.'
+  bad: |
+    function Get-Report
+    {
+        $body = @'
+            {
+              "ok": true
+            }
+        '@
+        return $body
+    }
+  good: |
+    function Get-Report
+    {
+        $body = @'
+            {
+              "ok": true
+            }
+    '@
+        return $body
+    }
+  rationale: An indented terminator is a whole-file parse failure on both 5.1 and 7.x, and the parser points
+    at the terminator rather than at the indentation, so it reads like an unrelated syntax error.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - heredoc
+  - syntax
+  detection:
+    pattern: (?m)^[ \t]+['\"]@
+- id: HD-002
+  category: heredoc
+  severity: high
+  title: Nothing but whitespace may follow the here-string header
+  description: 'The opening delimiter has to end the line. A comment, a statement, a cast or a trailing
+    argument after @'' or @" makes the parser report ''No characters are allowed after a here-string
+    header but before the end of line'', and because the header never opens a string the rest of the
+    script is mis-parsed too. Trailing whitespace on that line is legal, so a formatter that strips
+    trailing spaces can turn a working script into a broken one: keep the header alone on its line
+    and put any annotation on the line above.'
+  bad: |
+    @'  # json payload
+    {
+      "name": "svc-01"
+    }
+    '@
+  good: |
+    # json payload
+    @'
+    {
+      "name": "svc-01"
+    }
+    '@
+  rationale: The failure is a parse-time error but the message names the header, not the offending trailing
+    token, which sends a reader looking for a missing delimiter instead of the comment.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - heredoc
+  - syntax
+  detection:
+    pattern: (?m)@['\"][ \t]*[^\s\r\n]
+- id: HD-003
+  category: heredoc
+  severity: high
+  title: Bash heredoc syntax does not exist in PowerShell
+  description: 'Models trained on shell tooling reach for <<EOF to hand a multi-line block to a command.
+    PowerShell has no such construct, and the interesting part is how it fails: << is parsed as
+    input redirection, so ''cmd <<EOF'' becomes a redirection looking for a file and the error is
+    ''Missing file specification after redirection operator'', not ''unknown syntax''. Nothing executes
+    and the caller usually retries with the same shape. Use a here-string @''...''@ assigned to a
+    variable, or write the payload to a file and pass its path.'
+  bad: |
+    cmd <<EOF
+    Get-Date
+    EOF
+  good: |
+    $payload = @'
+    Get-Date
+    '@
+    $payload | Out-String
+  rationale: Because << is tokenized as redirection, the misread command is never run and the error mentions a
+    missing file, so the real cause (wrong language for the construct) stays hidden.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - heredoc
+  - portability
+  detection:
+    pattern: <<[~]?
+- id: HD-004
+  category: heredoc
+  severity: medium
+  title: Do not use -Encoding UTF8 as the cross-runtime fix
+  description: 'COMP-009 correctly requires an explicit -Encoding, but on Windows PowerShell 5.1 the value utf8
+    still writes an EF BB BF byte-order mark, so the file is still three bytes different from the
+    same command on PowerShell 7, which writes utf8NoBOM. Strict consumers such as jq, json.load
+    and hash verification reject or misread the marked file. When byte identity across runtimes
+    matters, serialize with .NET: WriteAllText with a UTF8Encoding created with the emitter flag
+    set to false. Measured on both runtimes this produces the same byte count and no marker.'
+  bad: |
+    $payload = @'
+    {
+      "ok": true
+    }
+    '@
+    Set-Content C:/temp/manifest.json $payload -Encoding UTF8
+  good: |
+    $payload = @'
+    {
+      "ok": true
+    }
+    '@
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText('C:/temp/manifest.json', $payload, $utf8NoBom)
+  rationale: The BOM is the exact byte-level difference that survives the COMP-009 fix, so two hosts still
+    disagree about the artifact even though both were told to be explicit.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - heredoc
+  - encoding
+  detection:
+    pattern: (?i)-Encoding\s+UTF8\b
+- id: HD-005
+  category: heredoc
+  severity: high
+  title: Never hand a double-quoted -Command string to a POSIX shell
+  description: 'Wrapping PowerShell code in double quotes for a -Command argument from bash or Git Bash lets
+    the outer shell expand $LASTEXITCODE, $_ and every other $name before PowerShell ever sees the
+    text, so the variable arrives empty and the command silently does the wrong thing. The control
+    case is worse: an empty $LASTEXITCODE is also the correct value immediately after no native
+    command has run, so from the output alone you cannot tell whether the variable was eaten by
+    bash or was genuinely unset. Quote the whole argument from the outer shell or escape every
+    dollar sign, and prefer -File with a script file for anything more than a single statement.'
+  bad: |
+    pwsh -NoProfile -Command "Write-Output status=$LASTEXITCODE"
+  good: |
+    pwsh -NoProfile -Command 'Write-Output status=$LASTEXITCODE'
+  rationale: The eaten-variable and the legitimately-empty-variable outcomes print identically, so the bug is
+    invisible in the transcript and only shows up as wrong behavior downstream.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - heredoc
+  - quoting
+  - interoperability
+  detection:
+    pattern: -Command\s+"[^"\n]*\$[A-Za-z_]
+- id: HD-006
+  category: heredoc
+  severity: high
+  title: Quote the heredoc delimiter when a script is the payload
+  description: When a shell heredoc is used to create a PowerShell script, an unquoted delimiter lets the
+    outer shell expand $path, $_ and $bs inside the payload, leaving bare assignment operators and empty
+    method calls behind. The file is written successfully, the exit status of the write is zero, and the
+    failure only appears later as a ParserError from the child script, far from its cause. Quote the delimiter
+    so the body is passed byte for byte.
+  bad: |
+    cat > script.ps1 <<PSEOF
+    $path = 'C:\temp\out'
+    $count = ($path.Length)
+    Write-Output $count
+    PSEOF
+  good: |
+    cat > script.ps1 <<'PSEOF'
+    $path = 'C:\temp\out'
+    $count = ($path.Length)
+    Write-Output $count
+    PSEOF
+  rationale: The generation step reports success, so the defect is attributed to the script's logic or to
+    PowerShell itself rather than to the quoting of the writer.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - heredoc
+  - interoperability
+  detection:
+    pattern: <<[A-Za-z_]
+- id: HD-007
+  category: heredoc
+  severity: medium
+  title: One standard input stream cannot carry a script and a payload
+  description: 'Piping a program''s source through stdin and then expecting the same stream to also deliver data
+    does not work: the interpreter consumes the source and the payload read returns zero bytes with
+    no error. Sending a script to python with ''-'' and a heredoc body, or relying on pwsh to read
+    both, silently produces an empty read. Keep the two concerns apart: write the script to a file
+    and invoke it by path, or pass the program with -c and feed only the payload on stdin.'
+  bad: |
+    python - <<'PY'
+    import sys
+    data = sys.stdin.read()
+    print(len(data))
+    PY
+  good: |
+    printf 'line-one' | python -c "import sys; print(len(sys.stdin.read()))"
+  rationale: The read succeeds and returns an empty string, so the caller treats the payload as genuinely
+    absent instead of as an undelivered one.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - heredoc
+  - interoperability
+  detection:
+    pattern: (?<![\w-])python\s+-\s*(?:$|<<)
+- id: HD-008
+  category: heredoc
+  severity: low
+  title: Do not span a real newline inside a single-quoted string
+  description: A single-quoted string may legally contain a literal newline, and it does, on both runtimes,
+    which is why it passes a parse check and then behaves unexpectedly once a formatter, a linter or a human
+    reflows the block. Multi-line payloads belong in a here-string, where the intent is visible and the
+    boundaries are unambiguous. Avoid the raw newline form even though it is accepted.
+  bad: |
+    $banner = '
+    continued on the following line'
+  good: |
+    $banner = @'
+    service report
+    generated by the reliability harness
+    '@
+  rationale: The construct is syntactically valid, so it survives every static gate and only fails when
+    something reflows the source or when the author expected the string to be single-line.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - heredoc
+  - style
+  detection:
+    pattern: (?<!@)'\n
+- id: HD-009
+  category: heredoc
+  severity: medium
+  title: Do not pipe a here-string straight into a cmdlet file sink
+  description: A here-string body uses the line feed bytes found in the source, while Set-Content, Out-File
+    and Add-Content append their own carriage-return-line-feed terminator to the last line. Piping a
+    here-string straight into one of those sinks therefore writes an artifact with mixed line endings and one
+    extra trailing CRLF that the payload never contained. The artifact is still parseable, so the damage is
+    limited to byte-level consumers, hash verification and diff review. Assign the payload to a variable and
+    serialize it explicitly when the bytes matter.
+  bad: |
+    @'
+    {
+      "ok": true
+    }
+    '@ | Set-Content C:/temp/manifest.json
+  good: |
+    $payload = @'
+    {
+      "ok": true
+    }
+    '@
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText('C:/temp/manifest.json', $payload, $utf8NoBom)
+  rationale: Mixed line endings pass every functional test and only surface in a checksum mismatch or a diff
+    that shows one unexpected line.
+  applies_to:
+  - powershell-5.1
+  - powershell-7
+  tags:
+  - heredoc
+  - encoding
+  - portability
+  detection:
+    pattern: (?m)['\"]@\s*\|\s*(?:Set-Content|Out-File|Add-Content)\b
+detection_rule_count: 45

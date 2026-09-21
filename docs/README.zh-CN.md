@@ -20,20 +20,21 @@ Probe → Classify(R/W/D/N/C) → Draft → Rule Check → Propose(-WhatIf) → 
 PowerShell-Reliability-Framework/
 ├── SKILL.md                        # 技能入口：Generation Protocol + 硬性门禁
 ├── README.md                       # 英文主说明
-├── knowledge/                      # 知识库（5 篇）
+├── knowledge/                      # 知识库（6 篇）
 │   ├── powershell-model.md         #   对象管道 / 流 / 错误语义
 │   ├── compatibility.md            #   5.1 ↔ 7.x 差异矩阵、模块可用性现实
 │   ├── security-rules.md           #   攻击面与防御性生成姿态
 │   ├── enterprise-patterns.md      #   ShouldProcess、日志、远程、批量操作礼仪
-│   └── anti-patterns.md            #   AP-01..AP-24 反模式目录（bad→good）
+│   ├── anti-patterns.md            #   AP-01..AP-24 反模式目录（bad→good）
+│   └── here-strings-and-heredocs.md #   定界符语法、bash heredoc 冲突、写入器差异
 ├── rules/
-│   └── reliability-rules.yaml      # 机器可读规则语料（v0.1：100 条）
+│   └── reliability-rules.yaml      # 机器可读规则语料（v0.1：109 条）
 ├── examples/
-│   ├── bad/                        # 10 个负样本（禁止执行）
-│   ├── good/                       # 10 个对应正样本
+│   ├── bad/                        # 12 个负样本（禁止执行）
+│   ├── good/                       # 12 个对应正样本
 │   └── EXAMPLES.md                 # 配对索引
 ├── benchmark/
-│   └── cases.json                  # 可靠性 Benchmark（v0.1：100 个用例）
+│   └── cases.json                  # 可靠性 Benchmark（v0.1：110 个用例）
 ├── tools/
 │   ├── probe-environment.ps1       # 目标机规范探测脚本
 │   ├── validate.py                 # 包完整性门禁（L0）
@@ -68,7 +69,7 @@ PowerShell-Reliability-Framework/
 
 `rules/reliability-rules.yaml` 中每条规则包含：`id · category · severity · title ·
 description · bad · good · rationale · applies_to · tags · detection{pattern,
-psscriptanalyzer}`。当前 100 条中 36 条带检测提示（见 YAML 头部 `detection_rule_count`），
+psscriptanalyzer}`。当前 109 条中 45 条带检测提示（见 YAML 头部 `detection_rule_count`），
 覆盖率随 v0.2 静态分析集成继续提升。
 
 ## 路线图
@@ -86,10 +87,10 @@ psscriptanalyzer}`。当前 100 条中 36 条带检测提示（见 YAML 头部 `
 
 | 指标 | 目标 | 当前 |
 |---|---:|---:|
-| Benchmark 用例数 | 100 | 100 ✅ |
-| 规则条数 | 100+ | 100 |
-| 知识文档 | 5 | 5 |
-| 示例配对 | — | 10 |
+| Benchmark 用例数 | 100 | 110 ✅ |
+| 规则条数 | 100+ | 109 |
+| 知识文档 | 5 | 6 |
+| 示例配对 | — | 12 |
 | Agent 支持 | 3+ | 任意支持 Skills 的 Agent（格式通用） |
 
 有效性目标（A/B 协议见 `docs/testing-plan.md`）正在建立；首轮双盲评测完成前不对外宣称任何有效性数字。
