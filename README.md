@@ -26,19 +26,21 @@ PowerShell-Reliability-Framework/
 │   ├── compatibility.md            # 5.1 ↔ 7.x delta matrix, module availability reality
 │   ├── security-rules.md           # attack surface & defensive generation posture
 │   ├── enterprise-patterns.md      # ShouldProcess, logging, remoting, bulk-op etiquette
-│   └── anti-patterns.md            # AP-01..AP-24 catalog (bad → good)
+│   ├── anti-patterns.md            # AP-01..AP-24 catalog (bad → good)
+│   └── here-strings-and-heredocs.md # delimiter grammar, bash heredoc collision, writer divergence
 ├── rules/
-│   └── reliability-rules.yaml      # machine-readable rule corpus (v0.1: 100 rules)
+│   └── reliability-rules.yaml      # machine-readable rule corpus (v0.1: 109 rules)
 ├── examples/
-│   ├── bad/                        # 10 negative samples (NEVER execute)
-│   ├── good/                       # 10 matching positive samples
+│   ├── bad/                        # 12 negative samples (NEVER execute)
+│   ├── good/                       # 12 matching positive samples
 │   └── EXAMPLES.md                 # pair index
 ├── benchmark/
-│   └── cases.json                  # reliability benchmark (v0.1: 100 cases)
+│   └── cases.json                  # reliability benchmark (v0.1: 110 cases)
 ├── tools/
 │   ├── probe-environment.ps1       # canonical target-machine probe
 │   ├── validate.py                 # package integrity gate (L0)
 │   └── rule-selftest.py            # detector-vs-snippet consistency gate (L1)
+├── .github/workflows/ci.yml        # CI gates (macOS-first lane)
 └── docs/
     ├── README.zh-CN.md             # 简体中文说明
     └── testing-plan.md             # testing & evaluation plan (A/B protocol)
@@ -69,7 +71,7 @@ PowerShell-Reliability-Framework/
 ## Rule schema
 
 Each rule in `rules/reliability-rules.yaml` carries: `id · category · severity · title · description · bad · good · rationale · applies_to · tags · detection{pattern, psscriptanalyzer}`.
-36 of 100 rules currently include detection hints (`detection_rule_count` in the YAML header); coverage grows with v0.2 static-analysis integration.
+45 of 109 rules currently include detection hints (`detection_rule_count` in the YAML header); coverage grows with v0.2 static-analysis integration.
 
 ## Roadmap
 
@@ -86,10 +88,10 @@ Each rule in `rules/reliability-rules.yaml` carries: `id · category · severity
 
 | Metric | Target | Current |
 |---|---:|---:|
-| Benchmark cases | 100 | 100 ✅ |
-| Rules | 100+ | 100 |
-| Knowledge docs | 5 | 5 |
-| Example pairs | — | 10 |
+| Benchmark cases | 100 | 110 ✅ |
+| Rules | 100+ | 109 |
+| Knowledge docs | 5 | 6 |
+| Example pairs | — | 12 |
 | Agent support | 3+ | any Skills-capable agent (portable format) |
 
 Measured effectiveness targets (A/B protocol in `docs/testing-plan.md`) are being
